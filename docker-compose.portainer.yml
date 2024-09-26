@@ -1,0 +1,16 @@
+services:
+  telegram-bot:
+    image: ghcr.io/ilyagulya/staring-misaka-python:master
+    container_name: telegram-spam-detection-bot
+    restart: unless-stopped
+    env_file:
+      - stack.env
+    volumes:
+      - staring_misaka_secret:/secret
+      - staring_misaka_data:/data
+
+volumes:
+  staring_misaka_data:
+    external: true
+  staring_misaka_secret:
+    external: true
