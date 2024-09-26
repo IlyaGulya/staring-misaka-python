@@ -10,3 +10,4 @@ telegram_bot.db
 *.egg-info
 *.session
 *.secret
+.idea
