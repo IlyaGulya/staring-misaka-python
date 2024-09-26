@@ -1,0 +1,16 @@
+services:
+  telegram-bot:
+    build: .
+    container_name: telegram-spam-detection-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - staring_misaka_secret:/secret
+      - staring_misaka_data:/data
+
+volumes:
+  staring_misaka_data:
+    external: true
+  staring_misaka_secret:
+    external: true

@@ -1,0 +1,4 @@
+.pixi
+.env
+*.session
+*.db

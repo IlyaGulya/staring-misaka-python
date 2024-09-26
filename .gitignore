@@ -1,0 +1,12 @@
+*.db
+*.py[cod]
+.env
+.web
+__pycache__/
+assets/external/
+telegram_bot.db
+# pixi environments
+.pixi
+*.egg-info
+*.session
+*.secret
