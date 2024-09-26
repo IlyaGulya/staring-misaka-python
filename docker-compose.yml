@@ -1,6 +1,6 @@
 services:
   telegram-bot:
-    image: ghcr.io/ilyagulya/staring-misaka-python:latest
+    image: ghcr.io/ilyagulya/staring-misaka-python:master
     container_name: telegram-spam-detection-bot
     restart: unless-stopped
     env_file:
