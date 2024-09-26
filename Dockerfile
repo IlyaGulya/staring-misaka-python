@@ -1,7 +1,10 @@
-FROM ghcr.io/prefix-dev/pixi:0.30.0
+FROM python:3.12-alpine
 
-COPY . /app
+COPY pyproject.toml /app/
 WORKDIR /app
-RUN pixi install
 
-CMD ["pixi", "run", "start"]
+RUN python -m pip install .
+
+COPY . .
+
+CMD ["python", "main.py"]

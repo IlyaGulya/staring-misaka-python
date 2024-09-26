@@ -1,17 +1,17 @@
-from typing import Callable
+# from typing import Callable
 
 from db import create_session
 from llm import create_llm
-from login_state import LoginStateUnion
+# from login_state import LoginStateUnion
 from telegram import create_bot
 
-login_state_listener: Callable[[LoginStateUnion], None] = None
+# login_state_listener: Callable[[LoginStateUnion], None] = None
 
 
-def set_login_state_listener(listener: Callable[[LoginStateUnion], None]) -> None:
-    global login_state_listener
-    login_state_listener = listener
-    pass
+# def set_login_state_listener(listener: Callable[[LoginStateUnion], None]) -> None:
+#     global login_state_listener
+#     login_state_listener = listener
+#     pass
 
 
 def main():

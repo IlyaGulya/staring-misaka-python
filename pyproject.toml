@@ -1,9 +1,15 @@
 [project]
 authors = [{ name = "Ilya Gulya", email = "ilya@gulya.me" }]
-dependencies = ["qrcode[pil]"]
+dependencies = [
+    #    "qrcode[pil]",
+    "telethon==1.36.0",
+    "instructor==1.4.1",
+    "anthropic>=0.34.2,<0.35",
+    "sqlalchemy>=2.0.35,<3",
+]
 description = "Add a short description here"
 name = "staring_misaka"
-requires-python = "== 3.12.3"
+requires-python = ">3.9"
 version = "0.1.0"
 
 [build-system]
@@ -16,15 +22,11 @@ platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
 
 [tool.pixi.pypi-dependencies]
 #staring_misaka = { path = ".", editable = true }
-telethon = "==1.36.0"
-instructor = "==1.4.1"
-anthropic = ">=0.34.2,<0.35"
-sqlalchemy = ">=2.0.35,<3"
 #nicegui = ">=2.1.0,<3"
 #segno = ">=1.6.1,<2"
 
-[tool.pixi.tasks]
-start = { cmd = ["python", "main.py"] }
-
 [tool.pixi.dependencies]
 pixi-pycharm = ">=0.0.6,<0.0.7"
+
+[tool.hatch.build.targets.wheel]
+include = ["*.py"]
