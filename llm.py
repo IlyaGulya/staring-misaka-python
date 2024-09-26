@@ -1,5 +1,5 @@
 import instructor
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 from pydantic import BaseModel
 
 from env import ANTHROPIC_API_KEY
@@ -18,8 +18,8 @@ class Llm:
     async def is_spam(self, message_text):
         # Prepare the prompt
         prompt = (
-            "Determine whether the following message is spam. "
-            "Return a JSON object with a single field 'is_spam' which is true if the message is spam, false otherwise.\n\n"
+            "Determine whether the following message is spam. It is posted in a chat where people discuss "
+            "Mobile dependency injection solutions. \n"
             "<message>"
             f"{message_text}"
             "</message>"
@@ -41,6 +41,6 @@ class Llm:
 
 
 def create_llm() -> Llm:
-    anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
     instructor_client = instructor.from_anthropic(anthropic_client)
     return Llm(instructor_client)

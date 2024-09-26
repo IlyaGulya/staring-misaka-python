@@ -57,7 +57,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
         session.add(pending_request)
         session.commit()
 
-    @client.on(events.NewMessage(chats=[ADMIN_ID], from_users=ADMIN_ID))
+    @client.on(events.NewMessage(chats=[ADMIN_ID], from_users=[ADMIN_ID]))
     async def admin_reply_handler(event):
         if event.reply_to_msg_id:
             # Check if this is a reply to our pending ban request

@@ -21,6 +21,8 @@ def main():
 
     bot.start()
 
+    bot.run_until_disconnected()
+
     # async def on_startup():
     #     await bot.connect()
     #     print("Telegram client started")
