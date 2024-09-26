@@ -1,0 +1,27 @@
+name: Deploy Images to GHCR
+
+env:
+  DOTNET_VERSION: '6.0.x'
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  push-store-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Login to GitHub Container Registry'
+        with:
+          registry: ghcr.io
+          username: ${{github.actor}}
+          password: ${{secrets.GITHUB_TOKEN}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: IlyaGulya/staring-misaka-python:latest
