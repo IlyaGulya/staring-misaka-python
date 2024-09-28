@@ -1,14 +1,16 @@
 import logging
+
 from sqlalchemy.orm import Session
 from telethon import TelegramClient, events
 
-from db import NewUser, PendingBanRequest
+from db import NewUser, PendingBanRequest, BannedUser, AdminSettings
 from env import TRACKING_CHAT_IDS, SESSION_PATH, API_ID, API_HASH, ADMIN_ID
 from llm import Llm
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
 
 def create_bot(session: Session, llm: Llm) -> TelegramClient:
     client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
@@ -37,23 +39,35 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
         logger.debug(f"New message event received: {event}")
         sender = await event.get_sender()
         logger.debug(f"Message sender: {sender.id}")
+
         # Check if sender is in the new_users table
         new_user = session.query(NewUser).filter_by(user_id=sender.id).first()
         if new_user:
-            logger.info(f"Processing first message from new user {sender.id}")
-            # Process the first message
+            logger.info(f"Processing message from new user {sender.id}")
             message_text = event.raw_text
             logger.debug(f"Message text: {message_text}")
             # Send to Claude API to check if spam
             is_spam = await llm.is_spam(message_text)
             logger.info(f"Spam check result for user {sender.id}: {is_spam}")
+
+            admin_settings = session.query(AdminSettings).first()
+
             if is_spam:
-                # Notify admin
-                await notify_admin(sender, message_text, event)
-            # Remove user from new_users table
-            session.delete(new_user)
-            session.commit()
-            logger.debug(f"Removed user {sender.id} from NewUser table")
+                if admin_settings.require_approval:
+                    # Notify admin
+                    await notify_admin(sender, message_text, event)
+                else:
+                    # Automatically ban the user
+                    await process_ban(
+                        user_id=sender.id,
+                        chat_id=event.chat_id,
+                        message_id=event.id,
+                        message_text=message_text,
+                        is_automatic=True
+                    )
+            else:
+                # If not spam, check if user should be approved
+                await check_user_approval(sender.id)
         else:
             logger.debug(f"Message from existing user {sender.id}, ignoring")
 
@@ -71,17 +85,68 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
             admin_message_id=sent_message.id,
             sender_id=sender.id,
             original_chat_id=event.chat_id,
-            original_message_id=event.id
+            original_message_id=event.id,
+            message_text=message_text
         )
         session.add(pending_request)
         session.commit()
         logger.debug(f"Added pending ban request for user {sender.id} to database")
 
+    async def process_ban(user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool):
+        logger.info(f"{'Automatically banning' if is_automatic else 'Admin approved ban for'} user {user_id}")
+
+        # Send the ban command
+        await client.send_message(
+            entity=chat_id,
+            message=f'/sban autoban by staring misaka. message: {message_text}',
+            reply_to=message_id
+        )
+
+        # Store the ban information in the database
+        banned_user = BannedUser(
+            user_id=user_id,
+            user_name=await get_user_name(user_id),
+            chat_id=chat_id,
+            message_text=message_text
+        )
+        session.add(banned_user)
+
+        # Remove the user from NewUser table if they're still there
+        new_user = session.query(NewUser).filter_by(user_id=user_id).first()
+        if new_user:
+            session.delete(new_user)
+
+        session.commit()
+        logger.info(f"Stored ban information for user {user_id}")
+
+        # Notify admin about the ban
+        admin_message = (
+            f"User {user_id} has been {'automatically ' if is_automatic else ''}banned "
+            f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
+        )
+        await client.send_message(ADMIN_ID, admin_message)
+
+        return banned_user
+
     @client.on(events.NewMessage(chats=[ADMIN_ID], from_users=[ADMIN_ID]))
     async def admin_reply_handler(event):
         logger.debug(f"Received message from admin: {event}")
-        if event.reply_to_msg_id:
-            logger.debug(f"Admin message is a reply to message ID: {event.reply_to_msg_id}")
+
+        if event.raw_text.startswith('/'):
+            command = event.raw_text.lower().split()[0]
+            if command == '/toggle_approval':
+                admin_settings = session.query(AdminSettings).first()
+                admin_settings.require_approval = not admin_settings.require_approval
+                session.commit()
+                await event.reply(
+                    f"Admin approval is now {'required' if admin_settings.require_approval else 'not required'}")
+            elif command == '/status':
+                admin_settings = session.query(AdminSettings).first()
+                await event.reply(
+                    f"Admin approval is currently {'required' if admin_settings.require_approval else 'not required'}")
+            else:
+                await event.reply("Unknown command. Available commands: /toggle_approval, /status")
+        elif event.reply_to_msg_id:
             # Check if this is a reply to our pending ban request
             pending_request = session.query(PendingBanRequest).filter_by(
                 admin_message_id=event.reply_to_msg_id
@@ -90,31 +155,51 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
                 logger.info(f"Processing admin reply for pending ban request: {pending_request.sender_id}")
                 if event.raw_text.strip().lower() == 'yes':
                     logger.info(f"Admin approved ban for user {pending_request.sender_id}")
-                    # Reply to the original message with '/sban'
-                    await client.send_message(
-                        entity=pending_request.original_chat_id,
-                        message='/sban',
-                        reply_to=pending_request.original_message_id
+
+                    await process_ban(
+                        user_id=pending_request.sender_id,
+                        chat_id=pending_request.original_chat_id,
+                        message_id=pending_request.original_message_id,
+                        message_text=pending_request.message_text,
+                        is_automatic=False
                     )
-                    # Notify admin that the user has been banned
-                    await client.send_message(
-                        ADMIN_ID, f"User {pending_request.sender_id} has been banned."
-                    )
+
+                    # Remove the pending request from the database
+                    session.delete(pending_request)
+                    session.commit()
+                    logger.debug(f"Removed pending ban request for user {pending_request.sender_id} from database")
                 else:
                     logger.info(f"Admin did not approve ban for user {pending_request.sender_id}")
                     await client.send_message(
                         ADMIN_ID, f"No action taken against user {pending_request.sender_id}."
                     )
-                # Remove the pending request from the database
-                session.delete(pending_request)
-                session.commit()
-                logger.debug(f"Removed pending ban request for user {pending_request.sender_id} from database")
+                    # Remove the pending request from the database
+                    session.delete(pending_request)
+                    session.commit()
             else:
                 logger.debug("Admin reply does not correspond to a pending ban request")
         else:
-            logger.debug("Processing non-reply message from admin")
+            # Existing code for processing non-reply messages from admin
             is_spam = await llm.is_spam(event.raw_text)
             await client.send_message(ADMIN_ID, f"Is spam: {is_spam}")
+
+    async def get_user_name(user_id):
+        try:
+            user = await client.get_entity(user_id)
+            return user.username if user.username else user.first_name
+        except Exception as e:
+            logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
+            return None
+
+    async def check_user_approval(user_id: int):
+        # This is a placeholder function. You should implement your own logic
+        # to determine when a user should be approved (e.g., after a certain number of non-spam messages)
+        # For now, we'll just remove the user from the NewUser table
+        new_user = session.query(NewUser).filter_by(user_id=user_id).first()
+        if new_user:
+            session.delete(new_user)
+            session.commit()
+            logger.info(f"User {user_id} has been approved and removed from NewUser table")
 
     logger.info("Bot setup complete")
     return client
