@@ -1,7 +1,6 @@
 [project]
 authors = [{ name = "Ilya Gulya", email = "ilya@gulya.me" }]
 dependencies = [
-    #    "qrcode[pil]",
     "telethon==1.36.0",
     "instructor==1.4.1",
     "anthropic>=0.34.2,<0.35",
@@ -19,11 +18,6 @@ requires = ["hatchling"]
 [tool.pixi.project]
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
-
-[tool.pixi.pypi-dependencies]
-#staring_misaka = { path = ".", editable = true }
-#nicegui = ">=2.1.0,<3"
-#segno = ">=1.6.1,<2"
 
 [tool.pixi.dependencies]
 pixi-pycharm = ">=0.0.6,<0.0.7"

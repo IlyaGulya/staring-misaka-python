@@ -1,14 +1,30 @@
 import os
 import sys
+import typing
 
-RAW_API_ID = os.environ.get("API_ID") or sys.exit("API_ID environment variable not set")
+
+def require_env(key: str) -> typing.Optional[str]:
+    return os.environ.get(key) or sys.exit(f"{key} environment variable is not set")
+
+
+RAW_API_ID = require_env("API_ID")
 API_ID = int(RAW_API_ID)
-API_HASH = os.environ.get("API_HASH") or sys.exit("API_HASH environment variable not set")
-RAW_ADMIN_ID = os.environ.get("ADMIN_ID") or sys.exit("ADMIN_ID environment variable not set")
-ADMIN_ID = int(RAW_ADMIN_ID) or sys.exit("ADMIN_ID environment variable not set")
-TRACKING_CHAT_IDS = list(map(int, filter(lambda x: len(x) > 0, os.environ.get("TRACKING_CHAT_IDS").split(","))))
+API_HASH = require_env("API_HASH")
+RAW_ADMIN_ID = require_env("ADMIN_ID")
+ADMIN_ID = int(RAW_ADMIN_ID)
+TRACKING_CHAT_IDS = (
+    list(
+        map(
+            int,
+            filter(
+                lambda x: len(x) > 0,
+                require_env("TRACKING_CHAT_IDS").split(",")
+            )
+        )
+    )
+)
 if len(TRACKING_CHAT_IDS) == 0:
     sys.exit("TRACKING_CHAT_IDS environment variable not set")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY") or sys.exit("ANTHROPIC_API_KEY environment variable not set")
-DB_PATH = os.environ.get("DB_PATH") or sys.exit("DB_PATH environment variable not set")
-SESSION_PATH = os.environ.get("SESSION_PATH") or sys.exit("SESSION_PATH environment variable not set")
+ANTHROPIC_API_KEY = require_env("ANTHROPIC_API_KEY")
+DB_PATH = require_env("DB_PATH")
+SESSION_PATH = require_env("SESSION_PATH")
