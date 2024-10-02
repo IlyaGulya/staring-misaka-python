@@ -8,7 +8,7 @@ from env import TRACKING_CHAT_IDS, SESSION_PATH, API_ID, API_HASH, ADMIN_ID
 from llm import Llm
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -18,9 +18,9 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
 
     @client.on(events.ChatAction(chats=TRACKING_CHAT_IDS))
     async def chat_action_handler(event):
-        logger.debug(f"Chat action event received: {event}")
+        logger.info(f"Chat action event received: {event}")
         if event.chat_id not in TRACKING_CHAT_IDS:
-            logger.debug(f"Ignoring event from non-tracked chat: {event.chat_id}")
+            logger.info(f"Ignoring event from non-tracked chat: {event.chat_id}")
             return
         # Check if a user has joined or been added to the group
         if event.user_joined or event.user_added:
@@ -30,22 +30,22 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
                 new_user = NewUser(user_id=event.user.id)
                 session.add(new_user)
                 session.commit()
-                logger.debug(f"Added user {event.user.id} to NewUser table")
+                logger.info(f"Added user {event.user.id} to NewUser table")
             else:
                 logger.warning("User joined event received, but user object is None")
 
     @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS))
     async def message_handler(event):
-        logger.debug(f"New message event received: {event}")
+        logger.info(f"New message event received: {event}")
         sender = await event.get_sender()
-        logger.debug(f"Message sender: {sender.id}")
+        logger.info(f"Message sender: {sender.id}")
 
         # Check if sender is in the new_users table
         new_user = session.query(NewUser).filter_by(user_id=sender.id).first()
         if new_user:
             logger.info(f"Processing message from new user {sender.id}")
             message_text = event.raw_text
-            logger.debug(f"Message text: {message_text}")
+            logger.info(f"Message text: {message_text}")
             # Send to Claude API to check if spam
             is_spam = await llm.is_spam(message_text)
             logger.info(f"Spam check result for user {sender.id}: {is_spam}")
@@ -69,7 +69,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
                 # If not spam, check if user should be approved
                 await check_user_approval(sender.id)
         else:
-            logger.debug(f"Message from existing user {sender.id}, ignoring")
+            logger.info(f"Message from existing user {sender.id}, ignoring")
 
     async def notify_admin(sender, message_text, event):
         logger.info(f"Notifying admin about potential spam from user {sender.id}")
@@ -79,7 +79,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
             f"{message_text}\n\nShould I ban this user? Reply 'yes' to ban."
         )
         sent_message = await client.send_message(ADMIN_ID, admin_message)
-        logger.debug(f"Sent admin notification message with ID: {sent_message.id}")
+        logger.info(f"Sent admin notification message with ID: {sent_message.id}")
         # Store the pending request in the database
         pending_request = PendingBanRequest(
             admin_message_id=sent_message.id,
@@ -90,7 +90,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
         )
         session.add(pending_request)
         session.commit()
-        logger.debug(f"Added pending ban request for user {sender.id} to database")
+        logger.info(f"Added pending ban request for user {sender.id} to database")
 
     async def process_ban(user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool):
         logger.info(f"{'Automatically banning' if is_automatic else 'Admin approved ban for'} user {user_id}")
@@ -130,7 +130,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
 
     @client.on(events.NewMessage(chats=[ADMIN_ID], from_users=[ADMIN_ID]))
     async def admin_reply_handler(event):
-        logger.debug(f"Received message from admin: {event}")
+        logger.info(f"Received message from admin: {event}")
 
         if event.raw_text.startswith('/'):
             command = event.raw_text.lower().split()[0]
@@ -167,7 +167,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
                     # Remove the pending request from the database
                     session.delete(pending_request)
                     session.commit()
-                    logger.debug(f"Removed pending ban request for user {pending_request.sender_id} from database")
+                    logger.info(f"Removed pending ban request for user {pending_request.sender_id} from database")
                 else:
                     logger.info(f"Admin did not approve ban for user {pending_request.sender_id}")
                     await client.send_message(
@@ -177,7 +177,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
                     session.delete(pending_request)
                     session.commit()
             else:
-                logger.debug("Admin reply does not correspond to a pending ban request")
+                logger.info("Admin reply does not correspond to a pending ban request")
         else:
             # Existing code for processing non-reply messages from admin
             is_spam = await llm.is_spam(event.raw_text)
