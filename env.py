@@ -27,4 +27,6 @@ if len(TRACKING_CHAT_IDS) == 0:
     sys.exit("TRACKING_CHAT_IDS environment variable not set")
 ANTHROPIC_API_KEY = require_env("ANTHROPIC_API_KEY")
 DB_PATH = require_env("DB_PATH")
-SESSION_PATH = require_env("SESSION_PATH")
+USERBOT_SESSION_PATH = require_env("USERBOT_SESSION_PATH")
+BOT_SESSION_PATH = require_env("BOT_SESSION_PATH")
+BOT_TOKEN = require_env("BOT_TOKEN")

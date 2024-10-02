@@ -1,18 +1,22 @@
 import logging
+from datetime import datetime
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from telethon import TelegramClient, events
+from telethon.tl.types import UpdateChannelParticipant
 
 from db import NewUser, PendingBanRequest, BannedUser, AdminSettings
-from env import TRACKING_CHAT_IDS, SESSION_PATH, API_ID, API_HASH, ADMIN_ID
+from env import TRACKING_CHAT_IDS, API_ID, API_HASH, ADMIN_ID, BOT_SESSION_PATH
 from llm import Llm
+from userbot import UserBot
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
-def create_bot(session: Session, llm: Llm) -> TelegramClient:
-    client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
+def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
+    client = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH)
     logger.info("Creating Telegram bot client")
 
     @client.on(events.ChatAction(chats=TRACKING_CHAT_IDS))
@@ -22,16 +26,29 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
             logger.info(f"Ignoring event from non-tracked chat: {event.chat_id}")
             return
         # Check if a user has joined or been added to the group
-        if event.user_joined or event.user_added:
-            if event.user:
-                logger.info(f"User {event.user.id} joined or was added to the group {event.chat_id}")
-                # Add new user to the database
-                new_user = NewUser(user_id=event.user.id)
-                session.add(new_user)
-                session.commit()
-                logger.info(f"Added user {event.user.id} to NewUser table")
+        if (event.user_added or event.user_joined) and isinstance(event.original_update, UpdateChannelParticipant):
+            user_id = event.user.id
+            logger.info(f"User {user_id} was added to the group {event.chat_id}")
+
+            # Check if the user already exists in the new_users table
+            existing_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
+
+            if existing_user:
+                logger.info(f"User {user_id} already exists in NewUser table. Updating join time.")
+                existing_user.join_time = datetime.utcnow()
             else:
-                logger.warning("User joined event received, but user object is None")
+                logger.info(f"Adding new user {user_id} to NewUser table")
+                new_user = NewUser(user_id=user_id, chat_id=event.chat_id)
+                session.add(new_user)
+
+            try:
+                session.commit()
+                logger.info(f"Successfully updated/added user {user_id} in NewUser table")
+            except SQLAlchemyError as e:
+                logger.error(f"Error updating/adding user {user_id} to NewUser table: {str(e)}")
+                session.rollback()
+        else:
+            logger.info("Ignoring non-user-added event or non-UpdateChannelParticipant event")
 
     @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS))
     async def message_handler(event):
@@ -40,7 +57,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
         logger.info(f"Message sender: {sender.id}")
 
         # Check if sender is in the new_users table
-        new_user = session.query(NewUser).filter_by(user_id=sender.id).first()
+        new_user = session.query(NewUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
         if new_user:
             logger.info(f"Processing message from new user {sender.id}")
             message_text = event.raw_text
@@ -66,7 +83,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
                     )
             else:
                 # If not spam, check if user should be approved
-                await check_user_approval(sender.id)
+                await check_user_approval(sender.id, event.chat_id)
         else:
             logger.info(f"Message from existing user {sender.id}, ignoring")
 
@@ -74,7 +91,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
         logger.info(f"Notifying admin about potential spam from user {sender.id}")
         # Send a message to the admin
         admin_message = (
-            f"User {sender.first_name} ({sender.id}) sent a message:\n\n"
+            f"User {sender.first_name} ({sender.id}) sent a message in chat {event.chat_id}:\n\n"
             f"{message_text}\n\nShould I ban this user? Reply 'yes' to ban."
         )
         sent_message = await client.send_message(ADMIN_ID, admin_message)
@@ -95,11 +112,8 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
         logger.info(f"{'Automatically banning' if is_automatic else 'Admin approved ban for'} user {user_id}")
 
         # Send the ban command
-        await client.send_message(
-            entity=chat_id,
-            message=f'/sban autoban by staring misaka. message: {message_text}',
-            reply_to=message_id
-        )
+        reason = f"autoban by staring misaka. message: {message_text}"
+        await userbot.send_ban_command(chat_id, message_id, reason)
 
         # Store the ban information in the database
         banned_user = BannedUser(
@@ -111,7 +125,7 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
         session.add(banned_user)
 
         # Remove the user from NewUser table if they're still there
-        new_user = session.query(NewUser).filter_by(user_id=user_id).first()
+        new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
         if new_user:
             session.delete(new_user)
 
@@ -190,11 +204,11 @@ def create_bot(session: Session, llm: Llm) -> TelegramClient:
             logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
             return None
 
-    async def check_user_approval(user_id: int):
+    async def check_user_approval(user_id: int, chat_id: int):
         # This is a placeholder function. You should implement your own logic
         # to determine when a user should be approved (e.g., after a certain number of non-spam messages)
         # For now, we'll just remove the user from the NewUser table
-        new_user = session.query(NewUser).filter_by(user_id=user_id).first()
+        new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
         if new_user:
             session.delete(new_user)
             session.commit()

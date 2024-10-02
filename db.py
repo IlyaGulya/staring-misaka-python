@@ -1,6 +1,6 @@
 import datetime
 
-from sqlalchemy import Integer, DateTime, create_engine, Text
+from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 
 from env import DB_PATH
@@ -15,12 +15,13 @@ class NewUser(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    chat_id: Mapped[int] = mapped_column(Integer, nullable=False)  # Add this line
     join_time: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
     )
 
     def __repr__(self) -> str:
-        return f"NewUser(id={self.id!r}, user_id={self.user_id!r}, join_time={self.join_time!r})"
+        return f"NewUser(id={self.id!r}, user_id={self.user_id!r}, chat_id={self.chat_id!r}, join_time={self.join_time!r})"
 
 
 class PendingBanRequest(Base):
@@ -63,8 +64,6 @@ class BannedUser(Base):
             f"chat_id={self.chat_id!r}, message_text={self.message_text!r}, banned_at={self.banned_at!r})"
         )
 
-from sqlalchemy import Boolean
-from sqlalchemy.orm import Mapped, mapped_column
 
 class AdminSettings(Base):
     __tablename__ = 'admin_settings'
@@ -74,6 +73,7 @@ class AdminSettings(Base):
 
     def __repr__(self) -> str:
         return f"AdminSettings(id={self.id!r}, require_approval={self.require_approval!r})"
+
 
 def create_session() -> Session:
     engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
