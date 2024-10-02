@@ -8,7 +8,6 @@ from env import TRACKING_CHAT_IDS, SESSION_PATH, API_ID, API_HASH, ADMIN_ID
 from llm import Llm
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
