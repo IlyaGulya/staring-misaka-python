@@ -36,9 +36,12 @@ async def test_add_group_command_by_admin(
 
     # Act
     await command_handlers.add_group_handler(mock_event)
-    await db_session.commit()  # Commit changes made by the handler
+    # REMOVED: await db_session.commit() # Commit is handled by command_handler's get_db_session context manager
 
     # Assert
+    # The db_session fixture will roll back, so to check the state *after* the handler's commit
+    # but before our test's rollback, we need to ensure the handler's session committed.
+    # For assertion, we rely on the same session; the data will be visible.
     new_group = await db_session.get(MonitoredGroup, chat_id_to_add)
     assert new_group is not None
     assert new_group.chat_id == chat_id_to_add
@@ -59,15 +62,15 @@ async def test_add_group_command_by_non_admin(
     THEN the group should NOT be added and an error message sent.
     """
     # Arrange
-    chat_id_to_add = TEST_CHAT_ID_2  # Use a different chat ID
+    chat_id_to_add = TEST_CHAT_ID_2
     non_admin_user_id = TEST_REGULAR_USER_ID
 
-    # Ensure the group doesn't exist from a previous test due to rollback failure
-    # This is a safeguard; ideally, db_session fixture handles perfect rollback.
+    # Safeguard: Ensure the group doesn't exist from a previous test due to rollback failure.
+    # This is more for robustness; db_session should handle perfect rollback.
     existing_group = await db_session.get(MonitoredGroup, chat_id_to_add)
     if existing_group:
         await db_session.delete(existing_group)
-        await db_session.commit()
+        await db_session.commit() # Commit this cleanup action if it happens
 
     mock_event = MagicMock(
         is_private=False,
@@ -92,7 +95,7 @@ async def test_add_group_command_by_non_admin(
 
     # Act
     await command_handlers.add_group_handler(mock_event)
-    await db_session.commit()  # Commit to see if anything was added (it shouldn't be)
+    # REMOVED: await db_session.commit() # Commit is handled by command_handler's get_db_session
 
     # Assert
     group = await db_session.get(MonitoredGroup, chat_id_to_add)

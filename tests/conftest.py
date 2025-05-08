@@ -34,8 +34,29 @@ TEST_CHAT_ID = -1001234567890
 TEST_CHAT_ID_2 = -1009876543210
 
 # Configure logging for tests
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-test_logger = logging.getLogger("pytest_conftest")
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+# 1. Set a default log level for the root logger.
+# This affects all libraries (telethon, sqlalchemy, etc.) unless overridden.
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+
+# 2. Set DEBUG level specifically for our application's modules.
+logging.getLogger("staring_misaka").setLevel(logging.DEBUG)
+
+# 3. Set DEBUG level for all test modules (under the 'tests' namespace).
+# This assumes test files use `logging.getLogger(__name__)`.
+logging.getLogger("tests").setLevel(logging.DEBUG)
+
+# Logger for this conftest.py file. Uses __name__, so it becomes "tests.conftest".
+# It will inherit the DEBUG level from the "tests" logger.
+test_logger = logging.getLogger(__name__)
+
+# Log the logging configuration status.
+test_logger.info(
+    "Test logging configured. Root logger level: INFO. "
+    "'staring_misaka' modules log at: DEBUG. "
+    "'tests' modules (e.g., tests.conftest, tests.integration.*) log at: DEBUG."
+)
 
 
 @pytest.fixture(scope="session")
@@ -49,7 +70,7 @@ def test_settings() -> Settings:
         OPENAI_API_KEY="test_openai_key",
         BOT_SESSION_PATH=":memory:",  # Use in-memory session for tests
         PROMETHEUS_PORT=8001,  # Different port
-        LOG_LEVEL="DEBUG",
+        LOG_LEVEL="DEBUG", # This setting in Settings object is for app runtime, test logging is configured above
         queue=QueueSettings(processing_interval_seconds=0.1, batch_size=2, max_automatic_retries=1)
         # Faster queue for tests
     )

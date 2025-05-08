@@ -10,7 +10,7 @@ from staring_misaka.telegram_utils import get_user_display_name
 from tests.conftest import TEST_BOT_ID, TEST_CHAT_ID, TEST_NEW_USER_ID, TEST_SUPER_ADMIN_ID
 
 pytestmark = pytest.mark.asyncio
-test_logger = logging.getLogger("pytest_spam_flow")
+test_logger = logging.getLogger(__name__)
 
 
 async def test_new_user_sends_spam_auto_ban(
