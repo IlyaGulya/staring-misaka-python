@@ -6,8 +6,7 @@ services:
     env_file:
       - .env
     volumes:
-      - staring_misaka_secret:/secret
-      - staring_misaka_data:/data
+      - staring_misaka_data:/app/staring_misaka.data
 
 volumes:
   staring_misaka_data:

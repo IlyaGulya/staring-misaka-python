@@ -1,26 +1,127 @@
 [project]
+name = "staring_misaka"
+version = "0.2.0"
+description = "Advanced Telegram spam detection bot"
 authors = [{ name = "Ilya Gulya", email = "ilya@gulya.me" }]
+requires-python = ">=3.10"
 dependencies = [
     "telethon==1.36.0",
     "instructor==1.4.1",
     "anthropic>=0.34.2,<0.35",
     "sqlalchemy>=2.0.35,<3",
+    "psycopg2-binary",
+    "python-dotenv==1.0.1",
+    "prometheus-client==0.20.0",
+    "pydantic==2.8.2",
+    "typing-inspect==0.9.0",
+    "typing_extensions==4.12.2",
+    "aiosqlite>=0.20.0,<0.21",
+    "greenlet>=3.0.0" # Added for SQLAlchemy async + aiosqlite
 ]
-description = "Add a short description here"
-name = "staring_misaka"
-requires-python = ">3.9"
-version = "0.1.0"
+
+[project.scripts]
+staring-misaka = "staring_misaka.__main__:run" # This might need to be src.staring_misaka.__main__:run if hatch doesn't handle it
 
 [build-system]
-build-backend = "hatchling.build"
 requires = ["hatchling"]
-
-[tool.pixi.project]
-channels = ["conda-forge"]
-platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
-
-[tool.pixi.dependencies]
-pixi-pycharm = ">=0.0.6,<0.0.7"
+build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-include = ["*.py"]
+packages = ["src/staring_misaka"] # MODIFIED for src layout
+
+# --- Pixi Specific Configuration ---
+[tool.pixi.project]
+channels = ["conda-forge", "nodefaults"]
+platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+
+[tool.pixi.dependencies]
+python = ">=3.10,<3.13"
+pytest = ">=8.2.2,<9"
+pytest-asyncio = ">=0.23.7,<0.24"
+pytest-cov = ">=5.0.0,<6"
+pytest-mock = ">=3.14.0,<4"
+ruff = ">=0.4.0"
+greenlet = ">=3.0.0" # Added for SQLAlchemy async + aiosqlite
+pixi-pycharm = ">=0.0.8,<0.0.9"
+
+[tool.pixi.tasks]
+test = { cmd = "pytest tests", depends-on = [] }
+test-unit = { cmd = "pytest tests/unit", depends-on = [] }
+test-integration = { cmd = "pytest tests/integration", depends-on = [] }
+test-cov = { cmd = "pytest --cov=src.staring_misaka --cov-report=term-missing --cov-report=html tests", depends-on = [] } # MODIFIED for src layout
+
+# Ruff tasks
+lint = { cmd = "ruff check ./src/staring_misaka ./tests", depends-on = [] } # MODIFIED for src layout
+lint-fix = { cmd = "ruff check --fix ./src/staring_misaka ./tests", depends-on = [] } # MODIFIED for src layout
+format = { cmd = "ruff format ./src/staring_misaka ./tests", depends-on = [] } # MODIFIED for src layout
+
+# --- Pytest Configuration ---
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src", "."] # MODIFIED to include project root for tests imports
+testpaths = ["tests"]
+
+# --- Ruff Configuration ---
+[tool.ruff]
+# Same as Black.
+line-length = 120 # Or 88, or your preferred length
+indent-width = 4
+
+# Assume Python 3.10+ features are available.
+target-version = "py310"
+
+[tool.ruff.lint]
+# Enable Pyflakes and Pycodestyle, then add more specific rule sets.
+# See https://docs.astral.sh/ruff/rules/ for all rules.
+select = [
+    "E",  # Pycodestyle errors
+    "W",  # Pycodestyle warnings
+    "F",  # Pyflakes
+    "I",  # isort (import sorting)
+    "UP", # pyupgrade (modernize Python code)
+    "B",  # flake8-bugbear (potential bugs and design problems)
+    "C4", # flake8-comprehensions (unnecessary comprehensions)
+    "SIM",# flake8-simplify (simplify code)
+    "PT", # flake8-pytest-style
+    "RUF",# Ruff-specific rules
+]
+ignore = [
+    "E501", # Line too long (handled by ruff format or manually if preferred)
+    "E701", # Multiple statements on one line
+]
+
+fixable = ["ALL"]
+unfixable = []
+
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pixi",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "htmlcov",
+]
+
+[tool.ruff.lint.isort]
+# known-first-party = ["staring_misaka"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
