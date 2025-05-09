@@ -108,13 +108,15 @@ class ActionService:
         new_user_record = await session.get(NewUser, new_user_key)
         if new_user_record:
             await session.delete(new_user_record)
-            await session.flush() # FIX: Added flush here
+            await session.flush()  # FIX: Added flush here
 
-        # FIX: Removed flush from here, added above after delete
-        # await session.flush()  # Ensure DB operations are sent before metrics/logging that might assume DB state
+        # Determine reason_type for metric
+        reason_for_metric_label = "admin_decision"  # Default
+        if ban_details.reason.startswith("Automatic ban:"):
+            reason_for_metric_label = "auto_spam"
+        # If ban_details.reason starts with "Admin approved ban", it will correctly use the default "admin_decision".
 
-        USERS_BANNED.labels(chat_id=str(chat_id),
-                            reason_type="auto_spam" if "LLM" in ban_details.reason or "Automatic ban" in ban_details.reason else "admin_decision").inc()
+        USERS_BANNED.labels(chat_id=str(chat_id), reason_type=reason_for_metric_label).inc()
         logger.info(f"User {user_id} successfully banned and processed in chat {chat_id}.")
 
         # 7. Notify super admin

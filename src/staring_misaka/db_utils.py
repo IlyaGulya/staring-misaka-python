@@ -1,9 +1,10 @@
+# src/staring_misaka/db_utils.py
 import datetime  # Required for timezone
 import logging
 from contextlib import asynccontextmanager
 from datetime import timezone  # Required for timezone.utc
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .config import Settings
@@ -64,63 +65,70 @@ async def initialize_default_data(settings: Settings):
         elif gs.super_admin_id != settings.admin_id:
             logger.warning(
                 f"Super admin ID in DB ({gs.super_admin_id}) differs from config ({settings.admin_id}). Keeping DB value.")
+        await session.flush()
 
-        default_prompt_result = await session.execute(select(Prompt).where(Prompt.is_global_default))
-        default_prompt = default_prompt_result.scalar_one_or_none()
+        # --- Robust Default Prompt Setup ---
+        target_default_prompt_name = "Global Default Spam Check"
+        # Try to find the canonical default prompt
+        default_prompt = await session.scalar(select(Prompt).where(Prompt.name == target_default_prompt_name))
 
         if not default_prompt:
-            fallback_prompt = await session.scalar(select(Prompt).where(Prompt.name == "Global Default Spam Check"))
-            if fallback_prompt:
-                default_prompt = fallback_prompt
-                default_prompt.is_global_default = True
-                logger.info(f"Found existing prompt '{default_prompt.name}' and marked as global default.")
-            else:
-                default_prompt = Prompt(
-                    name="Global Default Spam Check",
-                    text=(
-                        "Analyze the following message. Is it spam? If yes, provide a very brief (under 100 characters) "
-                        "reason for the ban, suitable for public display in a chat group. "
-                        "The chat group is for general discussion, but unsolicited advertising, "
-                        "scams, or irrelevant content are considered spam.\n\n<message>\n{message_text}\n</message>"
-                    ),
-                    is_global_default=True,
-                    created_at=datetime.datetime.now(timezone.utc)  # Explicitly set timezone
-                )
-                session.add(default_prompt)
-                await session.flush()
-                logger.info(f"Created new default global prompt: {default_prompt.name}")
+            # If it doesn't exist, create it.
+            default_prompt = Prompt(
+                name=target_default_prompt_name,
+                text=(
+                    "Analyze the following message. Is it spam? If yes, provide a very brief (under 100 characters) "
+                    "reason for the ban, suitable for public display in a chat group. "
+                    "The chat group is for general discussion, but unsolicited advertising, "
+                    "scams, or irrelevant content are considered spam.\n\n<message>\n{message_text}\n</message>"
+                ),
+                is_global_default=False, # Will be set to True below
+                created_at=datetime.datetime.now(timezone.utc)
+            )
+            session.add(default_prompt)
+            await session.flush() # Ensure ID is available for default_prompt
+            logger.info(f"Created new canonical default prompt: '{default_prompt.name}' (ID: {default_prompt.id}).")
 
-        if not default_prompt.id: await session.flush()  # Ensure ID is available if just created
-        if not gs.default_prompt_id or gs.default_prompt_id != default_prompt.id:
-            gs.default_prompt_id = default_prompt.id
-            logger.info(f"Set default_prompt_id in GlobalSettings to {default_prompt.id} ('{default_prompt.name}').")
+        # Unset is_global_default for all other prompts
+        await session.execute(
+            update(Prompt)
+            .where(Prompt.id != default_prompt.id)
+            .values(is_global_default=False)
+        )
+        # Set the canonical prompt as the global default
+        default_prompt.is_global_default = True
+        gs.default_prompt_id = default_prompt.id # Assign ID to GlobalSettings
+        logger.info(f"Ensured '{default_prompt.name}' (ID: {default_prompt.id}) is the global default prompt in GlobalSettings.")
+        await session.flush() # Ensure changes to gs and prompt are persisted before commit
 
-        target_default_provider = "Anthropic"
+        # --- Default Model Setup ---
+        target_default_model_name = "Claude 3 Haiku"
         target_default_api_id = "claude-3-haiku-20240307"
-        target_default_name = "Claude 3 Haiku"
+        target_default_provider = "Anthropic"
 
+        # Find or create the canonical default model
         default_model = await session.scalar(
-            select(LLMModel).where(LLMModel.provider == target_default_provider,
-                                   LLMModel.api_identifier == target_default_api_id)
+            select(LLMModel).where(LLMModel.name == target_default_model_name,
+                                   LLMModel.api_identifier == target_default_api_id,
+                                   LLMModel.provider == target_default_provider)
         )
         if not default_model:
-            default_model = LLMModel(name=target_default_name, api_identifier=target_default_api_id,
+            default_model = LLMModel(name=target_default_model_name, api_identifier=target_default_api_id,
                                      provider=target_default_provider,
-                                     created_at=datetime.datetime.now(timezone.utc))  # Explicitly set timezone
+                                     created_at=datetime.datetime.now(timezone.utc))
             session.add(default_model)
-            await session.flush()
-            logger.info(f"Created default LLMModel entry: {default_model.name}")
+            await session.flush() # Ensure ID for default_model
+            logger.info(f"Created default LLMModel entry: {default_model.name} (ID: {default_model.id}).")
 
-        if not default_model.id: await session.flush()  # Ensure ID is available
-        if not gs.default_model_id:
+        # Ensure GlobalSettings points to this canonical default model
+        # If gs.default_model_id is already set, we check if it's valid.
+        # If it's not our canonical default, we still override it to ensure the canonical one is set.
+        if gs.default_model_id != default_model.id:
+            logger.info(f"Resetting GlobalSettings.default_model_id from {gs.default_model_id} to canonical default '{default_model.name}' (ID: {default_model.id}).")
             gs.default_model_id = default_model.id
-            logger.info(f"Set default_model_id in GlobalSettings to {default_model.id} ('{default_model.name}').")
-        else:
-            current_default_model = await session.get(LLMModel, gs.default_model_id)
-            if not current_default_model:
-                logger.warning(
-                    f"Global default model ID {gs.default_model_id} in DB is invalid. Resetting to {default_model.name} (ID: {default_model.id}).")
-                gs.default_model_id = default_model.id
+
+        await session.flush() # Ensure gs changes are persisted
+
     logger.info("Default data initialization complete.")
 
 

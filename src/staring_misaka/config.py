@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class QueueSettings(BaseModel):
     """Configuration specific to the LLM check queue processing."""
-    processing_interval_seconds: int = Field(
+    processing_interval_seconds: float = Field(
         5 * 60,  # Default to 5 minutes
         validation_alias="QUEUE_PROCESSING_INTERVAL_SECONDS",
         description="Interval in seconds for the background task to process the LLM check queue."

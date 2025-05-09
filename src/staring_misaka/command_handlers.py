@@ -60,14 +60,21 @@ class CommandHandlers:
             prompt_id = int(identifier)
             return await session.get(Prompt, prompt_id)
         except ValueError:
-            return await session.scalar(select(Prompt).where(Prompt.name == identifier))
+            # If identifier is quoted, unquote it for name search
+            identifier_for_name_search = identifier
+            if isinstance(identifier, str) and len(identifier) >= 2 and identifier.startswith('"') and identifier.endswith('"'):
+                identifier_for_name_search = identifier[1:-1]
+            return await session.scalar(select(Prompt).where(Prompt.name == identifier_for_name_search))
 
     async def _find_model_by_id_or_name(self, session: AsyncSession, identifier: str) -> LLMModel | None:
         try:
             model_id = int(identifier)
             return await session.get(LLMModel, model_id)
         except ValueError:
-            return await session.scalar(select(LLMModel).where(LLMModel.name == identifier))
+            identifier_for_name_search = identifier
+            if isinstance(identifier, str) and len(identifier) >= 2 and identifier.startswith('"') and identifier.endswith('"'):
+                identifier_for_name_search = identifier[1:-1]
+            return await session.scalar(select(LLMModel).where(LLMModel.name == identifier_for_name_search))
 
     async def add_group_handler(self, event: events.NewMessage.Event):
         if event.is_private:

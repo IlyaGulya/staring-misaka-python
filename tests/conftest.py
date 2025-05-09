@@ -1,9 +1,12 @@
 import logging  # Add logging
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
+import datetime  # For setup_queue_test
+from decimal import Decimal  # For setup_queue_test
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telethon import TelegramClient
 from telethon.tl.types import Channel
@@ -14,6 +17,10 @@ from staring_misaka.action_service import ActionService
 from staring_misaka.command_handlers import CommandHandlers
 from staring_misaka.config import QueueSettings, Settings
 
+import asyncio  # For main_event_loop
+import staring_misaka.web_ui as web_ui_module  # Import the module itself
+from staring_misaka.config import Settings
+
 # Import necessary items for db_engine fixture
 from staring_misaka.db_models import (  # FIX: Add LLMModel and Prompt
     Base,
@@ -22,6 +29,7 @@ from staring_misaka.db_models import (  # FIX: Add LLMModel and Prompt
     MonitoredGroup,
     NewUser,
     Prompt,
+    ModelPricing,  # Added for setup_queue_test
 )
 from staring_misaka.db_utils import init_db as actual_init_db
 from staring_misaka.db_utils import initialize_default_data as actual_initialize_default_data
@@ -29,7 +37,6 @@ from staring_misaka.event_handlers import EventHandlers
 from staring_misaka.llm_service import LLMService
 
 # Use a separate in-memory SQLite for testing
-# REMOVED cache=shared to improve test isolation
 TEST_DB_URL = "sqlite+aiosqlite:///file:memdb_test?mode=memory&uri=true"
 
 # Test constants
@@ -67,24 +74,24 @@ test_logger.info(
 )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def test_settings() -> Settings:
     """Override settings for testing."""
     test_logger.info("Creating test settings...")
     return Settings(
-        API_ID=12345, API_HASH="test_hash", BOT_TOKEN="test_token", ADMIN_ID=TEST_SUPER_ADMIN_ID,
-        DB_URL=TEST_DB_URL,
-        ANTHROPIC_API_KEY="test_anthropic_key",  # Provide dummy keys
-        OPENAI_API_KEY="test_openai_key",
-        BOT_SESSION_PATH=":memory:",  # Use in-memory session for tests
-        PROMETHEUS_PORT=8001,  # Different port
-        LOG_LEVEL="DEBUG", # This setting in Settings object is for app runtime, test logging is configured above
+        api_id=12345, api_hash="test_hash", bot_token="test_token", admin_id=TEST_SUPER_ADMIN_ID,
+        db_url=TEST_DB_URL,
+        anthropic_api_key="test_anthropic_key",  # Provide dummy keys
+        openai_api_key="test_openai_key",
+        bot_session_path=":memory:",  # Use in-memory session for tests
+        prometheus_port=8001,  # Different port
+        log_level="DEBUG",  # This setting in Settings object is for app runtime, test logging is configured above
         queue=QueueSettings(processing_interval_seconds=0.1, batch_size=2, max_automatic_retries=1)
         # Faster queue for tests
     )
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="function")
 async def db_engine(test_settings):
     """
     Initializes db_utils for the application code, creates the test database engine,
@@ -272,7 +279,7 @@ def event_handlers(test_settings, mock_telegram_client, real_llm_service, action
     handlers = EventHandlers(
         settings=test_settings,
         client=mock_telegram_client,
-        llm_service=real_llm_service, # Use the real service
+        llm_service=real_llm_service,  # Use the real service
         action_service=action_service
     )
     handlers.update_monitored_chats_cache = AsyncMock()  # Mock this to control cache state in tests
@@ -281,7 +288,7 @@ def event_handlers(test_settings, mock_telegram_client, real_llm_service, action
 
 @pytest.fixture
 def command_handlers(test_settings, mock_telegram_client, action_service, event_handlers,
-                     real_llm_service) -> CommandHandlers: # Use real_llm_service here too
+                     real_llm_service) -> CommandHandlers:  # Use real_llm_service here too
     """Provides a CommandHandlers instance with mocks and REAL LLM Service."""
     test_logger.debug("Creating Command Handlers with REAL LLM Service...")
     handlers = CommandHandlers(
@@ -289,7 +296,7 @@ def command_handlers(test_settings, mock_telegram_client, action_service, event_
         client=mock_telegram_client,
         action_service=action_service,
         event_handlers_ref=event_handlers,
-        llm_service=real_llm_service # Use the real service
+        llm_service=real_llm_service  # Use the real service
     )
     return handlers
 
@@ -350,42 +357,94 @@ async def setup_queue_test(db_session, monitored_group, new_user_in_group):
     gs = await db_session.get(GlobalBotSettings, 1)
     assert gs is not None
 
-    prompt = await db_session.get(Prompt, gs.default_prompt_id) if gs.default_prompt_id else None
-    if not prompt:
-        prompt_name = f"DefaultQueueTestPrompt_{id(db_session)}"
-        prompt_id_to_use = gs.default_prompt_id if gs.default_prompt_id else 1 # Use ID 1 if not set
-        existing_prompt_with_id = await db_session.get(Prompt, prompt_id_to_use)
-        if existing_prompt_with_id and existing_prompt_with_id.name != prompt_name:
-             # If ID 1 exists with a different name, try ID 100 (basic collision avoidance)
-             prompt_id_to_use = 100
-             existing_prompt_with_id = await db_session.get(Prompt, prompt_id_to_use)
-             if existing_prompt_with_id: prompt_id_to_use += 1
+    # --- Prompt Setup ---
+    current_default_prompt_id_in_gs = gs.default_prompt_id
+    # For tests, we often want a fresh, known prompt.
+    test_prompt_name = f"TestFixturePrompt_{id(db_session)}"
+    test_prompt_obj = await db_session.scalar(select(Prompt).where(Prompt.name == test_prompt_name))
 
-        prompt = Prompt(id=prompt_id_to_use, name=prompt_name, text="Test: {message_text}", is_global_default=False)
-        if not gs.default_prompt_id:
-            prompt.is_global_default = True
-        db_session.add(prompt)
-        await db_session.flush()
-        if not gs.default_prompt_id: gs.default_prompt_id = prompt.id
-        test_logger.debug(f"Created/set prompt: ID={prompt.id}, Name={prompt.name}")
+    if not test_prompt_obj:
+        test_prompt_obj = Prompt(name=test_prompt_name, text="Test Prompt Text: {message_text}",
+                                 is_global_default=False)
+        db_session.add(test_prompt_obj)
+        await db_session.flush()  # Get ID for test_prompt_obj
 
-    model = await db_session.get(LLMModel, gs.default_model_id) if gs.default_model_id else None
-    if not model:
-        model_name = f"DefaultQueueTestModel_{id(db_session)}"
-        model_id_to_use = gs.default_model_id if gs.default_model_id else 1 # Use ID 1 if not set
-        existing_model_with_id = await db_session.get(LLMModel, model_id_to_use)
-        if existing_model_with_id and existing_model_with_id.name != model_name:
-            model_id_to_use = 100 # Basic collision avoidance
-            existing_model_with_id = await db_session.get(LLMModel, model_id_to_use)
-            if existing_model_with_id: model_id_to_use += 1
+    # Unset old default prompt's flag if it exists and is different
+    if gs.default_prompt_id and gs.default_prompt_id != test_prompt_obj.id:
+        old_default_prompt = await db_session.get(Prompt, gs.default_prompt_id)
+        if old_default_prompt:
+            old_default_prompt.is_global_default = False
 
-        # Default to Anthropic provider as the mock client in tests often targets this
-        model = LLMModel(id=model_id_to_use, name=model_name, api_identifier="test-m-queue", provider="Anthropic")
-        db_session.add(model)
-        await db_session.flush()
-        if not gs.default_model_id: gs.default_model_id = model.id
-        test_logger.debug(f"Created/set model: ID={model.id}, Name={model.name}")
+    test_prompt_obj.is_global_default = True
+    gs.default_prompt_id = test_prompt_obj.id
+    prompt = test_prompt_obj
+    test_logger.debug(
+        f"Using/Set prompt for test: ID={prompt.id}, Name={prompt.name}, GS default_prompt_id now {gs.default_prompt_id}")
+
+    # --- Model Setup ---
+    current_default_model_id_in_gs = gs.default_model_id
+    test_model_name = f"TestFixtureModel_{id(db_session)}"
+    test_model_obj = await db_session.scalar(select(LLMModel).where(LLMModel.name == test_model_name))
+    if not test_model_obj:
+        test_model_obj = LLMModel(name=test_model_name, api_identifier="test-fixture-model",
+                                  provider="Anthropic")  # Default to Anthropic
+        db_session.add(test_model_obj)
+        await db_session.flush()  # Get ID
+
+    gs.default_model_id = test_model_obj.id
+    model = test_model_obj
+    test_logger.debug(
+        f"Using/Set model for test: ID={model.id}, Name={model.name}, GS default_model_id now {gs.default_model_id}")
+
+    # Add default pricing for the model used in the test
+    today = datetime.date.today()
+    existing_pricing = await db_session.scalar(
+        select(ModelPricing)
+        .where(ModelPricing.model_id == model.id)
+        .where(ModelPricing.effective_from_date <= today)
+        .where((ModelPricing.effective_to_date.is_(None)) | (ModelPricing.effective_to_date >= today))
+    )
+    if not existing_pricing:
+        default_pricing = ModelPricing(
+            model_id=model.id,
+            input_price_per_million_tokens=Decimal("0.25"),
+            output_price_per_million_tokens=Decimal("1.25"),
+            currency="USD",
+            effective_from_date=today - datetime.timedelta(days=1),  # Ensure it's active
+            effective_to_date=None
+        )
+        db_session.add(default_pricing)
+        test_logger.debug(f"Added default pricing for model ID {model.id} for test setup.")
 
     await db_session.flush()
     test_logger.debug(f"Setup complete. Yielding prompt (ID={prompt.id}) and model (ID={model.id})")
     yield prompt, model
+
+
+@pytest_asyncio.fixture(scope="function", autouse=True)  # Autouse to ensure it runs for all tests in modules using it
+async def setup_web_ui_globals(
+        test_settings: Settings,
+        real_llm_service: LLMService,  # Or mock_llm_service if preferred for some tests
+        action_service: ActionService
+):
+    """
+    Sets up the global variables in the web_ui module that its handlers rely on.
+    This runs for each test function to ensure a clean state.
+    """
+    web_ui_module._app_settings = test_settings
+    try:
+        web_ui_module._main_event_loop = asyncio.get_running_loop()
+    except RuntimeError:  # If no loop is running yet (e.g. during pytest collection)
+        web_ui_module._main_event_loop = asyncio.new_event_loop()  # Fallback, might need refinement if problematic
+        asyncio.set_event_loop(web_ui_module._main_event_loop)
+
+    web_ui_module._llm_service_instance = real_llm_service
+    web_ui_module._action_service_instance = action_service
+
+    yield  # Test runs here
+
+    # Teardown (optional, but good practice to clear them)
+    web_ui_module._app_settings = None
+    web_ui_module._main_event_loop = None
+    web_ui_module._llm_service_instance = None
+    web_ui_module._action_service_instance = None
