@@ -1,17 +1,23 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select, func  # Added func
+from sqlalchemy import func, select  # Added func
 
-from staring_misaka.db_models import MonitoredGroup, NewUser, PendingAdminAction, QueuedLLMCheck, Prompt, LLMModel, \
-    BannedUser
+from staring_misaka.db_models import (
+    LLMModel,
+    MonitoredGroup,
+    NewUser,
+    PendingAdminAction,
+    Prompt,
+    QueuedLLMCheck,
+)
 from tests.conftest import (
     TEST_CHAT_ID,
     TEST_CHAT_ID_2,
     TEST_GROUP_ADMIN_ID,
+    TEST_NEW_USER_ID,  # For admin deny ban test
     TEST_REGULAR_USER_ID,
     TEST_SUPER_ADMIN_ID,
-    TEST_NEW_USER_ID,  # For admin deny ban test
     assert_user_approved,  # Import helper
 )
 

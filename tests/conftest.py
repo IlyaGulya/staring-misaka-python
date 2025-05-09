@@ -1,8 +1,9 @@
+import asyncio  # For main_event_loop
+import datetime  # For setup_queue_test
 import logging  # Add logging
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock
-import datetime  # For setup_queue_test
 from decimal import Decimal  # For setup_queue_test
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -13,30 +14,27 @@ from telethon.tl.types import Channel
 from telethon.tl.types import User as TelegramUser
 
 import staring_misaka.db_utils as app_db_utils
+import staring_misaka.web_ui as web_ui_module  # Import the module itself
 from staring_misaka.action_service import ActionService
 from staring_misaka.command_handlers import CommandHandlers
 from staring_misaka.config import QueueSettings, Settings
 
-import asyncio  # For main_event_loop
-import staring_misaka.web_ui as web_ui_module  # Import the module itself
-
 # Import necessary items for db_engine fixture
 from staring_misaka.db_models import (  # FIX: Add LLMModel and Prompt
+    BannedUser,  # Added for assert_user_banned helper
     Base,
-    BannedUser, # Added for assert_user_banned helper
     GlobalBotSettings,
     LLMModel,
+    ModelPricing,  # Added for setup_queue_test
     MonitoredGroup,
     NewUser,
     Prompt,
-    ModelPricing,  # Added for setup_queue_test
 )
 from staring_misaka.db_utils import init_db as actual_init_db
 from staring_misaka.db_utils import initialize_default_data as actual_initialize_default_data
+from staring_misaka.dto import LLMSpamAnalysisResult  # For mock_llm_service_spam/non_spam
 from staring_misaka.event_handlers import EventHandlers
 from staring_misaka.llm_service import LLMService
-from staring_misaka.dto import LLMSpamAnalysisResult # For mock_llm_service_spam/non_spam
-
 
 # Use a separate in-memory SQLite for testing
 TEST_DB_URL = "sqlite+aiosqlite:///file:memdb_test?mode=memory&uri=true"

@@ -1,40 +1,41 @@
-import pytest
-import pandas as pd
-from decimal import Decimal
 import datetime
-from unittest.mock import MagicMock, AsyncMock
+from decimal import Decimal
+from unittest.mock import AsyncMock
 
-from sqlalchemy import select, func, delete # Added delete, func
+import pandas as pd
+import pytest
+from sqlalchemy import delete, select  # Added delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from staring_misaka.config import Settings
+
 # Added NewUser for some queue tests
-from staring_misaka.db_models import LLMModel, Prompt, GlobalBotSettings, ModelPricing, QueuedLLMCheck, NewUser
+from staring_misaka.db_models import GlobalBotSettings, LLMModel, ModelPricing, NewUser, Prompt, QueuedLLMCheck
 from staring_misaka.web_ui import (
+    # Dashboard
+    get_bot_status,  # Added for dashboard test
+    get_llm_model_choices,  # Helper used by pricing UI
+    handle_create_llm_model,
+    handle_create_model_pricing,
+    handle_create_prompt,
+    handle_delete_llm_model,
+    handle_delete_model_pricing,
+    handle_delete_prompt,
+    handle_discard_queued_item,
+    handle_reprocess_queued_item,
+    handle_set_global_default_model,
+    handle_set_global_default_prompt,
+    handle_update_llm_model,
+    handle_update_prompt,
     # LLM Models
     list_llm_models_data,
-    handle_create_llm_model,
-    handle_update_llm_model,
-    handle_delete_llm_model,
-    handle_set_global_default_model,
-    # Prompts
-    list_prompts_data,
-    handle_create_prompt,
-    handle_update_prompt,
-    handle_delete_prompt,
-    handle_set_global_default_prompt,
     # Model Pricing
     list_model_pricing_data,
-    handle_create_model_pricing,
-    handle_delete_model_pricing,
-    get_llm_model_choices,  # Helper used by pricing UI
+    # Prompts
+    list_prompts_data,
     # Queue Management
     list_queued_checks_data,
-    handle_reprocess_queued_item,
-    handle_discard_queued_item,
-    # Dashboard
-    get_bot_status, # Added for dashboard test
 )
-from staring_misaka.config import Settings
 from tests.conftest import TEST_CHAT_ID, TEST_NEW_USER_ID  # For queue item context
 
 pytestmark = pytest.mark.asyncio  # Mark all tests in this file as async
@@ -93,7 +94,7 @@ class TestWebUIDashboardHandlers:
 
     async def test_get_bot_status_db_ok_with_queue_items(self, db_session: AsyncSession, mocker, test_settings: Settings):
         # Create some queued items needing admin action
-        from staring_misaka.dto import MessageContext # Local import
+        from staring_misaka.dto import MessageContext  # Local import
         gs = await db_session.get(GlobalBotSettings, 1)
         assert gs and gs.default_model_id and gs.default_prompt_id
 
@@ -387,10 +388,12 @@ class TestWebUIQueueManagementHandlers:
 
     async def _create_test_queued_item(self, db_session: AsyncSession, reason: str,
                                        status: str = "pending", user_id_override: int | None = None) -> QueuedLLMCheck:
-        from staring_misaka.dto import MessageContext # Local import
+        from staring_misaka.dto import MessageContext  # Local import
 
         gs = await db_session.get(GlobalBotSettings, 1)
-        assert gs and gs.default_model_id and gs.default_prompt_id
+        assert gs
+        assert gs.default_model_id
+        assert gs.default_model_id
 
         user_id_to_use = user_id_override if user_id_override else TEST_NEW_USER_ID
         # Ensure unique message ID for each item if multiple are created
@@ -451,8 +454,8 @@ class TestWebUIQueueManagementHandlers:
 
     async def test_reprocess_queued_item_success_not_spam(self, db_session: AsyncSession, mocker,
                                                           test_settings: Settings):
-        from staring_misaka.dto import LLMSpamAnalysisResult # Local import
-        import staring_misaka.web_ui as web_ui_module # Local import
+        import staring_misaka.web_ui as web_ui_module  # Local import
+        from staring_misaka.dto import LLMSpamAnalysisResult  # Local import
 
         item_user_id = TEST_NEW_USER_ID + 66 # Unique user
         db_session.add(NewUser(user_id=item_user_id, chat_id=TEST_CHAT_ID)) # Added NewUser import
@@ -460,7 +463,6 @@ class TestWebUIQueueManagementHandlers:
         item = await self._create_test_queued_item(db_session, "Reprocess - not spam", "pending", user_id_override=item_user_id)
         item_id_to_reprocess = item.id
 
-        import staring_misaka.web_ui as web_ui_module
         llm_service_to_mock = web_ui_module._llm_service_instance
         assert llm_service_to_mock is not None
 
@@ -484,8 +486,8 @@ class TestWebUIQueueManagementHandlers:
 
     async def test_reprocess_queued_item_success_is_spam(self, db_session: AsyncSession, mocker,
                                                           test_settings: Settings):
-        from staring_misaka.dto import LLMSpamAnalysisResult # Local import
-        import staring_misaka.web_ui as web_ui_module # Local import
+        import staring_misaka.web_ui as web_ui_module  # Local import
+        from staring_misaka.dto import LLMSpamAnalysisResult  # Local import
 
         item_user_id = TEST_NEW_USER_ID + 77
         db_session.add(NewUser(user_id=item_user_id, chat_id=TEST_CHAT_ID)) # Added NewUser import
@@ -520,8 +522,8 @@ class TestWebUIQueueManagementHandlers:
 
     async def test_reprocess_queued_item_fails_llm(self, db_session: AsyncSession, mocker,
                                                           test_settings: Settings):
-        from staring_misaka.dto import LLMSpamAnalysisResult # Local import
-        import staring_misaka.web_ui as web_ui_module # Local import
+        import staring_misaka.web_ui as web_ui_module  # Local import
+        from staring_misaka.dto import LLMSpamAnalysisResult  # Local import
 
         item = await self._create_test_queued_item(db_session, "Reprocess - will fail LLM", "pending")
         item_id_to_reprocess = item.id

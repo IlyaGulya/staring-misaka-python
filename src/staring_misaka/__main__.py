@@ -11,7 +11,7 @@ from .db_utils import create_tables, get_db_session, init_db, initialize_default
 from .event_handlers import EventHandlers  # Handles Telegram events
 from .llm_service import LLMService  # LLM interaction service
 from .metrics_service import start_metrics_server, update_dynamic_gauges  # Prometheus metrics
-from .web_ui import launch_gradio_ui # Import Gradio UI launcher
+from .web_ui import launch_gradio_ui  # Import Gradio UI launcher
 
 # Configure basic logging for the application
 # More advanced logging (e.g., file rotation, structured logging) can be added.

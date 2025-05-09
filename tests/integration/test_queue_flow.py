@@ -1,24 +1,27 @@
 # tests/integration/test_queue_flow.py
+import asyncio  # For running process_llm_queue_batch multiple times
 import logging  # Add logging
 from unittest.mock import AsyncMock, MagicMock
-import asyncio  # For running process_llm_queue_batch multiple times
 
 import httpx  # For request in APIError
 import pytest
 import pytest_asyncio  # For async fixtures
 from anthropic import APIError as AnthropicAPIError  # For specific error type
 from openai import APIError as OpenAIAPIError  # Import for OpenAI specific error if needed
-from sqlalchemy import select, func  # Added func
+from sqlalchemy import func, select  # Added func
 
 from staring_misaka import metrics_service as metrics_module  # For mocking metrics
 from staring_misaka.config import Settings
-from staring_misaka.db_models import NewUser, PendingAdminAction, QueuedLLMCheck, LLMLog  # For new test
+from staring_misaka.db_models import LLMLog, NewUser, PendingAdminAction, QueuedLLMCheck  # For new test
 from staring_misaka.dto import LLMSpamAnalysisResult, MessageContext  # For new test
 from staring_misaka.event_handlers import EventHandlers
 from staring_misaka.llm_service import LLMService
 from tests.conftest import (
-    TEST_CHAT_ID, TEST_NEW_USER_ID, TEST_SUPER_ADMIN_ID,
-    SPAM_MESSAGE_TEXT, NON_SPAM_MESSAGE_TEXT  # Import text constants
+    NON_SPAM_MESSAGE_TEXT,
+    SPAM_MESSAGE_TEXT,  # Import text constants
+    TEST_CHAT_ID,
+    TEST_NEW_USER_ID,
+    TEST_SUPER_ADMIN_ID,
 )
 
 pytestmark = pytest.mark.asyncio

@@ -1,10 +1,11 @@
 # tests/integration/test_initialization.py
 import pytest
-from sqlalchemy import select, func # Added func
+from sqlalchemy import func, select  # Added func
 
-from staring_misaka.db_models import GlobalBotSettings, Prompt, LLMModel
-from staring_misaka.db_utils import initialize_default_data, create_tables # Assuming init_db is called by db_engine fixture
-from tests.conftest import TEST_SUPER_ADMIN_ID # Import from conftest
+from staring_misaka.db_models import GlobalBotSettings, LLMModel, Prompt
+from staring_misaka.db_utils import (  # Assuming init_db is called by db_engine fixture
+    initialize_default_data,
+)
 
 pytestmark = pytest.mark.asyncio
 

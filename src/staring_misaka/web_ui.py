@@ -3,23 +3,23 @@ import asyncio
 import datetime  # For date inputs
 import logging
 import threading  # For running Gradio in a separate thread
-from typing import TYPE_CHECKING, Any, cast
 from decimal import Decimal  # For pricing
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd  # For gr.DataFrame
 import gradio as gr
-from sqlalchemy import delete, select, text, update, func  # Added func for count
+import pandas as pd  # For gr.DataFrame
+from sqlalchemy import func, select, text  # Added func for count
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession  # Import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from .db_models import LLMModel, Prompt, GlobalBotSettings, ModelPricing, QueuedLLMCheck  # Added QueuedLLMCheck
+from .db_models import GlobalBotSettings, LLMModel, ModelPricing, Prompt, QueuedLLMCheck  # Added QueuedLLMCheck
 from .db_utils import get_db_session
 
 if TYPE_CHECKING:
+    from .action_service import ActionService
     from .config import Settings
     from .llm_service import LLMService
-    from .action_service import ActionService
     # from telethon import TelegramClient # If client status is needed directly
 
 logger = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ async def handle_delete_llm_model(model_id: int):
         gs = await _get_global_settings(session) # Pass session / Re-fetch gs
         if not gs:
             gr.Error("Global settings not found, cannot proceed with deletion safety checks.")
-            logger.error(f"Gradio: handle_delete_llm_model - Global settings not found.")
+            logger.error("Gradio: handle_delete_llm_model - Global settings not found.")
             return await list_llm_models_data()
 
         logger.info(f"Gradio: Attempting to delete LLM Model ID {model_id}. Current global default model ID: {gs.default_model_id}")
@@ -185,7 +185,7 @@ async def handle_set_global_default_model(model_id: int):
         return await list_llm_models_data()
 
     async with get_db_session() as session:
-        gs = await _get_global_settings(session);  # Pass session
+        gs = await _get_global_settings(session)  # Pass session
         if not gs:
             gr.Error("Global settings not found.")
             return await list_llm_models_data()
@@ -284,7 +284,7 @@ def _build_llm_models_tab():
 # --- Prompt Management ---
 async def list_prompts_data() -> pd.DataFrame:
     async with get_db_session() as session:
-        gs = await _get_global_settings(session);  # Pass session
+        gs = await _get_global_settings(session)  # Pass session
         default_prompt_id = gs.default_prompt_id if gs else None
 
         stmt = select(Prompt.id, Prompt.name, Prompt.text, Prompt.is_global_default, Prompt.created_at)
@@ -366,7 +366,7 @@ async def handle_delete_prompt(prompt_id: int):
         return await list_prompts_data()
 
     async with get_db_session() as session:
-        gs = await _get_global_settings(session);  # Pass session
+        gs = await _get_global_settings(session)  # Pass session
         if not gs:
             gr.Error("Global settings not found, cannot proceed with deletion safety checks.")
             return await list_prompts_data()
@@ -399,7 +399,7 @@ async def handle_set_global_default_prompt(prompt_id: int):
         return await list_prompts_data()
 
     async with get_db_session() as session:
-        gs = await _get_global_settings(session);  # Pass session
+        gs = await _get_global_settings(session)  # Pass session
         if not gs:
             gr.Error("Global settings not found.")
             return await list_prompts_data()
@@ -504,8 +504,8 @@ def _build_prompts_tab():
 # --- Model Pricing Management ---
 async def list_model_pricing_data() -> pd.DataFrame:
     async with get_db_session() as session:
-        stmt = select(ModelPricing).options(selectinload(ModelPricing.model));
-        result = await session.execute(stmt);
+        stmt = select(ModelPricing).options(selectinload(ModelPricing.model))
+        result = await session.execute(stmt)
         pricing_records = []
         for record in result.scalars().all():
             pricing_records.append({
@@ -540,7 +540,7 @@ async def handle_create_model_pricing(
     if not all([input_price_str, output_price_str, currency, from_date_obj]): gr.Warning(
         "Input Price, Output Price, Currency, and Effective From Date are required."); return await list_model_pricing_data()
     try:
-        input_price = Decimal(input_price_str);
+        input_price = Decimal(input_price_str)
         output_price = Decimal(output_price_str)
         if input_price < 0 or output_price < 0: raise ValueError("Prices cannot be negative.")
         if to_date_obj and to_date_obj < from_date_obj: raise ValueError(
@@ -557,7 +557,7 @@ async def handle_create_model_pricing(
                 effective_from_date=from_date_obj,
                 effective_to_date=to_date_obj
             )
-            session.add(new_pricing);
+            session.add(new_pricing)
             gr.Info(f"Pricing added for Model ID {model_id} effective from {from_date_obj.isoformat()}.")
         except IntegrityError as e:
             gr.Error(f"Error: Pricing for this model and effective period might already exist or overlap. Details: {e.orig}")
@@ -575,7 +575,7 @@ async def handle_delete_model_pricing(pricing_id: int):
             pricing_record = await session.get(ModelPricing, pricing_id)
             if not pricing_record: gr.Error(
                 f"Model Pricing record with ID {pricing_id} not found."); return await list_model_pricing_data()
-            await session.delete(pricing_record);
+            await session.delete(pricing_record)
 
             gr.Info(f"Model Pricing record ID {pricing_id} deleted successfully.")
         except Exception as e:

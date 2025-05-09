@@ -3,33 +3,32 @@ import logging  # Add logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select, func  # Added func
+from sqlalchemy import select  # Added func
 from telethon import events  # Added events
 
 from staring_misaka import metrics_service as metrics_module  # For mocking metrics
 from staring_misaka.config import Settings  # For EventHandlers construction
 from staring_misaka.db_models import (
-    BannedUser,
     LLMLog,
     MonitoredGroup,
     NewUser,
-    PendingAdminAction,
-    QueuedLLMCheck,  # Added for one of the new tests
+    PendingAdminAction,  # Added for one of the new tests
 )
 from staring_misaka.dto import LLMSpamAnalysisResult
 from staring_misaka.event_handlers import EventHandlers  # For one of the new tests
 from staring_misaka.telegram_utils import get_user_display_name
 from tests.conftest import (
+    NON_SPAM_MESSAGE_TEXT,
+    SPAM_MESSAGE_TEXT,  # Import text constants
     TEST_BOT_ID,
     TEST_CHAT_ID,
     TEST_CHAT_ID_2,  # For non-monitored group test
     TEST_NEW_USER_ID,
     TEST_REGULAR_USER_ID,  # For approved user test
     TEST_SUPER_ADMIN_ID,
-    SPAM_MESSAGE_TEXT, NON_SPAM_MESSAGE_TEXT,  # Import text constants
-    assert_user_banned_with_details, assert_user_approved,  # Import helpers
-    setup_monitored_group_with_config,  # Import specific fixture
-)
+    assert_user_approved,
+    assert_user_banned_with_details,  # Import helpers
+    )
 
 pytestmark = pytest.mark.asyncio
 test_logger = logging.getLogger(__name__)  # Use __name__ for logger

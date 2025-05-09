@@ -1,11 +1,8 @@
 # src/staring_misaka/command_handlers.py
-import datetime
 import logging
-from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient, events
 
@@ -14,7 +11,6 @@ from .config import Settings
 from .db_models import (
     GlobalBotSettings,
     LLMModel,
-    ModelPricing,
     MonitoredGroup,
     NewUser,
     PendingAdminAction,
