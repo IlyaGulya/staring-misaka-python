@@ -1,3 +1,4 @@
+# src/staring_misaka/__main__.py
 import asyncio
 import logging
 
@@ -10,6 +11,7 @@ from .db_utils import create_tables, get_db_session, init_db, initialize_default
 from .event_handlers import EventHandlers  # Handles Telegram events
 from .llm_service import LLMService  # LLM interaction service
 from .metrics_service import start_metrics_server, update_dynamic_gauges  # Prometheus metrics
+from .web_ui import launch_gradio_ui # Import Gradio UI launcher
 
 # Configure basic logging for the application
 # More advanced logging (e.g., file rotation, structured logging) can be added.
@@ -46,8 +48,8 @@ async def main():
 
     # 4. Initialize Core Services
     # LLMService needs the Telegram client to notify admin about queued checks.
-    llm_service = LLMService(settings, client)
-    action_service = ActionService(settings, client)  # Action service also needs the client
+    llm_service = LLMService(settings, client) # Defined here
+    action_service = ActionService(settings, client) # Defined here
 
     # Event Handlers and Command Handlers setup
     # Event Handlers instance is passed to Command Handlers to allow cache updates (e.g., monitored chats).
@@ -61,6 +63,20 @@ async def main():
     command_handlers.register_handlers()
     await event_handlers.update_monitored_chats_cache()  # Perform initial load of monitored chats
     logger.info("All services initialized and Telegram handlers registered.")
+
+    # 6. Launch Gradio Web UI (if configured with auth)
+    # We get the current event loop here to pass to Gradio UI if needed for thread-safe async calls
+    current_loop = asyncio.get_running_loop()
+    if settings.gradio_username and settings.gradio_password and settings.gradio_password.get_secret_value():
+        launch_gradio_ui(
+            settings=settings,
+            llm_service=llm_service,         # Pass LLMService
+            action_service=action_service,   # Pass ActionService
+            main_event_loop=current_loop
+        )
+    else:
+        logger.info("Gradio UI not launched due to missing username/password configuration.")
+
 
     # --- Background Tasks ---
     # List to keep track of background tasks for graceful shutdown
@@ -83,7 +99,6 @@ async def main():
         # Task for periodically processing the queued LLM checks
         async def llm_queue_processor_task_loop():
             """Background task to process failed LLM checks from the queue."""
-            # This uses simple polling. For higher scale, consider Postgres LISTEN/NOTIFY or external MQs.
             logger.info(
                 f"LLM Queue processor starting. Interval: {settings.queue.processing_interval_seconds}s, Batch Size: {settings.queue.batch_size}")
             await asyncio.sleep(30)  # Initial delay before the first run
@@ -92,7 +107,7 @@ async def main():
                     # Use a new session for each batch processing run
                     async with get_db_session() as session:
                         # Pass action_service needed by reprocess_queued_item for creating PendingAdminAction
-                        await llm_service.process_llm_queue_batch(session, action_service)
+                        await llm_service.process_llm_queue_batch(session, action_service) # Pass action_service here
                 except Exception as e_queue:  # Catch broad exceptions
                     logger.error(f"Error in LLM queue processor task: {e_queue}", exc_info=True)
                 # Wait for the configured interval before the next run

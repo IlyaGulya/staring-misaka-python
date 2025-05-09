@@ -46,6 +46,8 @@ ENV PATH="/app/.pixi/envs/default/bin:$PATH"
 
 # Expose Prometheus port
 EXPOSE 8000
+# Expose Gradio UI port
+EXPOSE 7860
 
 # Command to run the application using pixi run and the script defined in pyproject.toml
 # `pixi run` automatically activates the correct environment.

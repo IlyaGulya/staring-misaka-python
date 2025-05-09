@@ -1,11 +1,11 @@
-from unittest.mock import AsyncMock, MagicMock
 import logging  # Add logging
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import select
 
 from staring_misaka.db_models import BannedUser, LLMLog, MonitoredGroup, NewUser, PendingAdminAction
-from staring_misaka.dto import LLMSpamAnalysisResult, MessageContext
+from staring_misaka.dto import LLMSpamAnalysisResult
 from staring_misaka.telegram_utils import get_user_display_name
 from tests.conftest import TEST_BOT_ID, TEST_CHAT_ID, TEST_NEW_USER_ID, TEST_SUPER_ADMIN_ID
 
@@ -71,7 +71,7 @@ async def test_new_user_sends_spam_auto_ban(
     # Act
     test_logger.info(f"Calling event_handlers.new_message_handler for msg {message_id}")
     await event_handlers.new_message_handler(mock_event)
-    test_logger.info(f"Handler finished, session state should be flushed/committed by its context.")
+    test_logger.info("Handler finished, session state should be flushed/committed by its context.")
 
 
     # Assert
@@ -114,7 +114,7 @@ async def test_new_user_sends_spam_auto_ban(
     assert new_user_check is None, "NewUser record was not deleted after ban"
 
     # --- Assert log attributes using variables fetched before expire_all ---
-    test_logger.debug(f"Asserting LLMLog attributes fetched before expire_all")
+    test_logger.debug("Asserting LLMLog attributes fetched before expire_all")
     assert logged_is_spam is True
     assert logged_reason == spam_reason
     assert logged_model_id == expected_model_id # Check correct model was logged
@@ -181,7 +181,7 @@ async def test_new_user_sends_spam_admin_approval(
     # Act 1: New message triggers LLM check and admin notification
     test_logger.info(f"Calling event_handlers.new_message_handler for msg {message_id} (needs approval)")
     await event_handlers.new_message_handler(mock_event_msg)
-    test_logger.info(f"Handler finished, session state should be flushed/committed by its context.")
+    test_logger.info("Handler finished, session state should be flushed/committed by its context.")
 
 
     # Assert 1: Admin notification sent, pending action created
@@ -233,7 +233,7 @@ async def test_new_user_sends_spam_admin_approval(
     pending_action_id = pending_action.id # Store ID before potential deletion
 
     # --- Assert log attributes using variables fetched before expire_all ---
-    test_logger.debug(f"Asserting LLMLog attributes from stage 1")
+    test_logger.debug("Asserting LLMLog attributes from stage 1")
     assert logged_is_spam_s1 is True
     assert logged_reason_s1 == spam_reason
     # ----------------------------------------------------------------------
@@ -248,7 +248,7 @@ async def test_new_user_sends_spam_admin_approval(
     # Act 2: Admin replies 'yes'
     test_logger.info(f"Calling command_handlers.admin_reply_handler for reply to {admin_notification_msg_id_for_reply}")
     await command_handlers.admin_reply_handler(mock_admin_reply)
-    test_logger.info(f"Handler finished, session state should be flushed/committed by its context.")
+    test_logger.info("Handler finished, session state should be flushed/committed by its context.")
 
 
     # Assert 2: Ban processed, pending action deleted
@@ -321,7 +321,7 @@ async def test_new_user_sends_non_spam(
     # Act
     test_logger.info(f"Calling event_handlers.new_message_handler for non-spam msg {message_id}")
     await event_handlers.new_message_handler(mock_event_msg)
-    test_logger.info(f"Handler finished, session state should be flushed/committed by its context.")
+    test_logger.info("Handler finished, session state should be flushed/committed by its context.")
 
 
     # Assert
@@ -353,7 +353,7 @@ async def test_new_user_sends_non_spam(
     assert new_user_check is None, "NewUser record was not deleted for non-spam message"
 
     # --- Assert log attributes using variables fetched before expire_all ---
-    test_logger.debug(f"Asserting LLMLog attributes fetched before expire_all (non-spam)")
+    test_logger.debug("Asserting LLMLog attributes fetched before expire_all (non-spam)")
     assert logged_is_spam is False
     assert logged_reason == non_spam_reason
     assert logged_model_id == expected_model_id # Check correct model was logged

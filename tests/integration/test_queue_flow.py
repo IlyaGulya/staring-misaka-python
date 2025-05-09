@@ -1,20 +1,18 @@
-from unittest.mock import AsyncMock, MagicMock
 import logging
-import datetime  # For QueuedLLMCheck creation
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
-import pytest_asyncio
-from sqlalchemy import select
 from anthropic import APIError as AnthropicAPIError
 from openai import APIError as OpenAIAPIError  # Import for OpenAI specific error if needed
-import httpx
+from sqlalchemy import select
 
-from staring_misaka.db_models import GlobalBotSettings, LLMModel, NewUser, PendingAdminAction, Prompt, QueuedLLMCheck
+from staring_misaka.config import Settings
+from staring_misaka.db_models import NewUser, PendingAdminAction, QueuedLLMCheck
+from staring_misaka.dto import LLMSpamAnalysisResult, MessageContext  # For new test
 from staring_misaka.event_handlers import EventHandlers
 from staring_misaka.llm_service import LLMService
-from staring_misaka.config import Settings
-from staring_misaka.dto import LLMSpamAnalysisResult, MessageContext  # For new test
-from tests.conftest import TEST_CHAT_ID, TEST_NEW_USER_ID, TEST_SUPER_ADMIN_ID, TEST_REGULAR_USER_ID  # For new test
+from tests.conftest import TEST_CHAT_ID, TEST_NEW_USER_ID, TEST_SUPER_ADMIN_ID  # For new test
 
 pytestmark = pytest.mark.asyncio
 test_logger = logging.getLogger(__name__)
@@ -102,14 +100,14 @@ async def test_llm_failure_queues_check_and_notifies_admin(
     )
 
     call_found = False
-    test_logger.debug(f"Checking sent messages log for admin notification...")
+    test_logger.debug("Checking sent messages log for admin notification...")
     for call_info in mock_telegram_client.sent_messages_log:
         args_call, _ = call_info["args"], call_info["kwargs"]
         test_logger.debug(f"Checking call: args={args_call}")
         if len(args_call) > 1 and args_call[0] == TEST_SUPER_ADMIN_ID:
             if expected_admin_msg_content_partial in args_call[1]:
                 call_found = True
-                test_logger.debug(f"Admin notification found.")
+                test_logger.debug("Admin notification found.")
                 break
     assert call_found, f"Admin notification not found or content mismatch. Expected partial: '{expected_admin_msg_content_partial}'. Log: {mock_telegram_client.sent_messages_log}"
 
@@ -258,7 +256,7 @@ async def test_process_llm_queue_batch_flow(
     assert expected_fail_reason == q_fail_final_state.reason_for_queueing, f"Expected reason '{expected_fail_reason}', got '{q_fail_final_state.reason_for_queueing}'"
 
     max_retry_admin_notification_found = any(
-        call["args"][0] == TEST_SUPER_ADMIN_ID and f"Max Auto-Retries Reached" in call["args"][
+        call["args"][0] == TEST_SUPER_ADMIN_ID and "Max Auto-Retries Reached" in call["args"][
             1] and f"Item ID: {q_fail_id}" in call["args"][1]
         for call in mock_telegram_client.sent_messages_log
     )

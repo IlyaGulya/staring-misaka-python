@@ -5,8 +5,8 @@ description = "Advanced Telegram spam detection bot"
 authors = [{ name = "Ilya Gulya", email = "ilya@gulya.me" }]
 requires-python = ">=3.10"
 dependencies = [
-    "telethon==1.36.0",
-    "instructor==1.8.0",
+    "telethon==1.40.0",
+    "instructor==1.8.1",
     "anthropic==0.51.0",
     "sqlalchemy==2.0.40",
     "python-dotenv==1.1.0",
@@ -14,6 +14,8 @@ dependencies = [
     "pydantic==2.11.4",
     "typing-inspect==0.9.0",
     "typing_extensions==4.13.2",
+    "pandas==2.2.3",
+    "gradio==5.29.0",
     "aiosqlite==0.21.0",
     "greenlet==3.2.1" # Added for SQLAlchemy async + aiosqlite
 ]
@@ -34,7 +36,7 @@ channels = ["conda-forge", "nodefaults"]
 platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
 
 [tool.pixi.dependencies]
-python = "==3.13.3"
+python = ">=3.12.0,<3.13"
 pytest = "==8.3.5"
 pytest-asyncio = "==0.26.0"
 pytest-cov = "==6.1.1"
@@ -53,6 +55,9 @@ test-cov = { cmd = "pytest --cov=src.staring_misaka --cov-report=term-missing --
 lint = { cmd = "ruff check ./src/staring_misaka ./tests", depends-on = [] } # MODIFIED for src layout
 lint-fix = { cmd = "ruff check --fix ./src/staring_misaka ./tests", depends-on = [] } # MODIFIED for src layout
 format = { cmd = "ruff format ./src/staring_misaka ./tests", depends-on = [] } # MODIFIED for src layout
+
+[tool.pixi.pypi-dependencies]
+staring_misaka = { path = ".", editable = true }
 
 # --- Pytest Configuration ---
 [tool.pytest.ini_options]
@@ -73,16 +78,16 @@ target-version = "py310"
 # Enable Pyflakes and Pycodestyle, then add more specific rule sets.
 # See https://docs.astral.sh/ruff/rules/ for all rules.
 select = [
-    "E",  # Pycodestyle errors
-    "W",  # Pycodestyle warnings
-    "F",  # Pyflakes
-    "I",  # isort (import sorting)
+    "E", # Pycodestyle errors
+    "W", # Pycodestyle warnings
+    "F", # Pyflakes
+    "I", # isort (import sorting)
     "UP", # pyupgrade (modernize Python code)
-    "B",  # flake8-bugbear (potential bugs and design problems)
+    "B", # flake8-bugbear (potential bugs and design problems)
     "C4", # flake8-comprehensions (unnecessary comprehensions)
-    "SIM",# flake8-simplify (simplify code)
+    "SIM", # flake8-simplify (simplify code)
     "PT", # flake8-pytest-style
-    "RUF",# Ruff-specific rules
+    "RUF", # Ruff-specific rules
 ]
 ignore = [
     "E501", # Line too long (handled by ruff format or manually if preferred)

@@ -1,6 +1,6 @@
+import logging  # Add logging
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
-import logging  # Add logging
 
 import pytest
 import pytest_asyncio
@@ -13,8 +13,16 @@ import staring_misaka.db_utils as app_db_utils
 from staring_misaka.action_service import ActionService
 from staring_misaka.command_handlers import CommandHandlers
 from staring_misaka.config import QueueSettings, Settings
+
 # Import necessary items for db_engine fixture
-from staring_misaka.db_models import Base, GlobalBotSettings, MonitoredGroup, NewUser, LLMModel, Prompt # FIX: Add LLMModel and Prompt
+from staring_misaka.db_models import (  # FIX: Add LLMModel and Prompt
+    Base,
+    GlobalBotSettings,
+    LLMModel,
+    MonitoredGroup,
+    NewUser,
+    Prompt,
+)
 from staring_misaka.db_utils import init_db as actual_init_db
 from staring_misaka.db_utils import initialize_default_data as actual_initialize_default_data
 from staring_misaka.event_handlers import EventHandlers
