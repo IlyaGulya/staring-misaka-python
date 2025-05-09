@@ -1,4 +1,3 @@
-# tests/integration/test_command_flow.py
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,6 +12,7 @@ from tests.conftest import (
     TEST_REGULAR_USER_ID,
     TEST_SUPER_ADMIN_ID,
     TEST_NEW_USER_ID,  # For admin deny ban test
+    assert_user_approved,  # Import helper
 )
 
 # Mark all tests in this file as async
@@ -79,7 +79,7 @@ async def test_add_group_command_by_non_admin(
     existing_group = await db_session.get(MonitoredGroup, chat_id_to_add)
     if existing_group:
         await db_session.delete(existing_group)
-        await db_session.flush() # Use flush instead of commit inside tests with db_session fixture
+        await db_session.flush()  # Use flush instead of commit inside tests with db_session fixture
         # await db_session.commit() # Commit this cleanup action if it happens # Original comment
 
     mock_event = MagicMock(
@@ -95,7 +95,8 @@ async def test_add_group_command_by_non_admin(
     async def mock_iter_participants_no_admin_for_this_user(c_id, *args, filter=None, **kwargs):
         if c_id == chat_id_to_add and filter and filter.__name__ == 'ChannelParticipantsAdmins':
             # Yield a different admin, or no one
-            yield MagicMock(spec=MagicMock, id=TEST_SUPER_ADMIN_ID + 10, is_admin=True) # Corrected to ensure different admin
+            yield MagicMock(spec=MagicMock, id=TEST_SUPER_ADMIN_ID + 10,
+                            is_admin=True)  # Corrected to ensure different admin
         else:  # Fallback to original mock for other cases if necessary
             async for p in original_iter_participants(c_id, *args, filter=filter, **kwargs):
                 yield p
@@ -114,14 +115,15 @@ async def test_add_group_command_by_non_admin(
     mock_event.reply.assert_called_once_with(
         "Only group administrators can add this group for monitoring."
     )
-    event_handlers.update_monitored_chats_cache.assert_not_called() # Ensure cache not updated
+    event_handlers.update_monitored_chats_cache.assert_not_called()  # Ensure cache not updated
 
     # Restore original mock if it was changed for this test specifically
     mock_telegram_client.iter_participants = original_iter_participants
 
 
 async def test_add_group_command_already_added(
-        db_session, mock_telegram_client, command_handlers, event_handlers, monitored_group # Use monitored_group fixture
+        db_session, mock_telegram_client, command_handlers, event_handlers, monitored_group
+        # Use monitored_group fixture
 ):
     """
     GIVEN a group that is already monitored
@@ -130,11 +132,11 @@ async def test_add_group_command_already_added(
     """
     # Arrange
     # monitored_group fixture ensures TEST_CHAT_ID is already in MonitoredGroup
-    admin_user_id = TEST_SUPER_ADMIN_ID # Super admin can also do this
+    admin_user_id = TEST_SUPER_ADMIN_ID  # Super admin can also do this
 
     mock_event = MagicMock(
         is_private=False,
-        chat_id=TEST_CHAT_ID, # Use the already monitored chat
+        chat_id=TEST_CHAT_ID,  # Use the already monitored chat
         sender_id=admin_user_id,
         text="/add_group",
         reply=AsyncMock()
@@ -146,12 +148,12 @@ async def test_add_group_command_already_added(
 
     # Assert
     final_count = await db_session.scalar(select(func.count(MonitoredGroup.chat_id)))
-    assert final_count == initial_count # No new group added
+    assert final_count == initial_count  # No new group added
 
     mock_event.reply.assert_called_once_with(
         "This group is already being monitored by the bot."
     )
-    event_handlers.update_monitored_chats_cache.assert_not_called() # Cache shouldn't be updated if no change
+    event_handlers.update_monitored_chats_cache.assert_not_called()  # Cache shouldn't be updated if no change
 
 
 async def test_remove_group_command_by_admin(
@@ -176,8 +178,9 @@ async def test_remove_group_command_by_admin(
         message_text_preview="Test pending"
     ))
     # For QueuedLLMCheck, needs message_context_json
-    from staring_misaka.dto import MessageContext # Local import for DTO
-    queued_context = MessageContext(user_id=TEST_NEW_USER_ID, chat_id=chat_to_remove, message_id=456, message_text="Test queued")
+    from staring_misaka.dto import MessageContext  # Local import for DTO
+    queued_context = MessageContext(user_id=TEST_NEW_USER_ID, chat_id=chat_to_remove, message_id=456,
+                                    message_text="Test queued")
     db_session.add(QueuedLLMCheck(
         message_context_json=queued_context.model_dump(mode='json'),
         reason_for_queueing="Test remove reason"
@@ -193,10 +196,11 @@ async def test_remove_group_command_by_admin(
     await command_handlers.remove_group_handler(mock_event)
 
     # Assert
-    db_session.expire_all() # Ensure fresh read
+    db_session.expire_all()  # Ensure fresh read
     assert await db_session.get(MonitoredGroup, chat_to_remove) is None
     assert await db_session.scalar(select(NewUser).where(NewUser.chat_id == chat_to_remove)) is None
-    assert await db_session.scalar(select(PendingAdminAction).where(PendingAdminAction.original_chat_id == chat_to_remove)) is None
+    assert await db_session.scalar(
+        select(PendingAdminAction).where(PendingAdminAction.original_chat_id == chat_to_remove)) is None
     # For QueuedLLMCheck, the query in handler is `message_context_json['chat_id'].as_integer() == chat_id`
     # We can test this by trying to find any item that might have matched
     remaining_queued = await db_session.execute(
@@ -228,20 +232,21 @@ async def test_remove_group_command_by_non_admin(
     )
 
     original_iter_participants = mock_telegram_client.iter_participants
+
     async def mock_iter_participants_no_admin_for_this_user(c_id, *args, filter=None, **kwargs):
         if c_id == chat_to_remove and filter and filter.__name__ == 'ChannelParticipantsAdmins':
-             yield MagicMock(spec=MagicMock, id=TEST_SUPER_ADMIN_ID + 10, is_admin=True) # Yield a different admin
+            yield MagicMock(spec=MagicMock, id=TEST_SUPER_ADMIN_ID + 10, is_admin=True)  # Yield a different admin
         else:
             async for p in original_iter_participants(c_id, *args, filter=filter, **kwargs): yield p
         if False: yield
-    mock_telegram_client.iter_participants = mock_iter_participants_no_admin_for_this_user
 
+    mock_telegram_client.iter_participants = mock_iter_participants_no_admin_for_this_user
 
     # Act
     await command_handlers.remove_group_handler(mock_event)
 
     # Assert
-    assert await db_session.get(MonitoredGroup, chat_to_remove) is not None # Still exists
+    assert await db_session.get(MonitoredGroup, chat_to_remove) is not None  # Still exists
     mock_event.reply.assert_called_once_with(
         "Only group administrators or the bot super admin can remove this group."
     )
@@ -249,19 +254,151 @@ async def test_remove_group_command_by_non_admin(
     mock_telegram_client.iter_participants = original_iter_participants
 
 
-async def test_config_group_command(
-    db_session, mock_telegram_client, command_handlers, monitored_group, setup_queue_test
+@pytest.mark.parametrize(
+    "setting_key,value_to_set,db_field_name,expected_db_value,expected_reply_suffix",
+    [
+        ("approval_required", "true", "require_admin_approval_for_ban", True, "Admin approval for bans set to: True"),
+        ("approval_required", "false", "require_admin_approval_for_ban", False,
+         "Admin approval for bans set to: False"),
+        ("preban_message", "true", "pre_ban_message_enabled", True, "Pre-ban notification message set to: True"),
+        ("preban_message", "false", "pre_ban_message_enabled", False, "Pre-ban notification message set to: False"),
+        ("delete_messages", "true", "delete_recent_messages_on_ban", True,
+         "Deletion of recent messages on ban set to: True"),
+        ("delete_messages", "false", "delete_recent_messages_on_ban", False,
+         "Deletion of recent messages on ban set to: False"),
+        ("delete_count", "5", "num_messages_to_delete_on_ban", 5, "Number of messages to delete on ban set to: 5"),
+        ("delete_count", "0", "num_messages_to_delete_on_ban", 0, "Number of messages to delete on ban set to: 0"),
+    ],
+)
+async def test_config_group_simple_settings(
+        db_session, command_handlers, monitored_group: MonitoredGroup,  # Get the group object
+        setting_key, value_to_set, db_field_name, expected_db_value, expected_reply_suffix
 ):
-    """
-    GIVEN a monitored group
-    WHEN an admin uses /config_group with various valid and invalid settings
-    THEN the group's configuration should be updated correctly or errors reported.
-    """
-    # monitored_group fixture ensures TEST_CHAT_ID is added.
-    # setup_queue_test ensures default prompt/model exist and can be used.
+    """Tests configuration of simple boolean and numeric group settings."""
+    # Arrange
+    # monitored_group fixture ensures TEST_CHAT_ID is added and provides the group object.
+    # Default monitored_group has approval_required=False, preban_message=True, delete_messages=True, delete_count=1
+    # This test will change them and verify.
+
+    mock_event = MagicMock(
+        is_private=False, chat_id=TEST_CHAT_ID, sender_id=TEST_SUPER_ADMIN_ID,
+        text=f"/config_group {setting_key} {value_to_set}", reply=AsyncMock()
+    )
+
+    # Act
+    await command_handlers.config_group_handler(mock_event)
+
+    # Assert
+    await db_session.refresh(monitored_group)  # Refresh from DB
+    assert getattr(monitored_group, db_field_name) == expected_db_value
+    mock_event.reply.assert_called_with(f"✅ Setting Updated! {expected_reply_suffix}")
+
+
+async def test_config_group_prompt_settings(
+        db_session, command_handlers, monitored_group: MonitoredGroup, setup_queue_test
+        # setup_queue_test for default prompt
+):
+    """Tests configuration of group-specific prompt."""
+    # Arrange
     admin_user_id = TEST_SUPER_ADMIN_ID
     chat_id_to_config = TEST_CHAT_ID
-    prompt_obj, model_obj = setup_queue_test # Get the actual prompt and model objects
+
+    # Create a custom prompt for this test
+    custom_prompt_name = f"CustomGroupPrompt_{TEST_CHAT_ID}"
+    custom_prompt = Prompt(name=custom_prompt_name, text="Custom prompt: {message_text} for this group.")
+    db_session.add(custom_prompt)
+    await db_session.flush()
+    custom_prompt_id = custom_prompt.id
+
+    async def send_config_command(value_str: str):
+        mock_event = MagicMock(
+            is_private=False, chat_id=chat_id_to_config, sender_id=admin_user_id,
+            text=f"/config_group group_prompt {value_str}", reply=AsyncMock()
+        )
+        await command_handlers.config_group_handler(mock_event)
+        return mock_event
+
+    # Test setting by ID
+    event_id = await send_config_command(str(custom_prompt_id))
+    await db_session.refresh(monitored_group)
+    assert monitored_group.custom_prompt_id == custom_prompt_id
+    event_id.reply.assert_called_with(
+        f"✅ Setting Updated! Group prompt set to: '{custom_prompt_name}' (ID: {custom_prompt_id}).")
+
+    # Test setting by Name (quoted if it had spaces, but this one doesn't)
+    event_name = await send_config_command(f'"{custom_prompt_name}"')  # Use quotes for robustness
+    await db_session.refresh(monitored_group)
+    assert monitored_group.custom_prompt_id == custom_prompt_id
+    event_name.reply.assert_called_with(
+        f"✅ Setting Updated! Group prompt set to: '{custom_prompt_name}' (ID: {custom_prompt_id}).")
+
+    # Test resetting to none/default
+    event_none = await send_config_command("none")
+    await db_session.refresh(monitored_group)
+    assert monitored_group.custom_prompt_id is None
+    event_none.reply.assert_called_with("✅ Setting Updated! Group prompt reset to global default.")
+
+    # Test setting non-existent prompt
+    event_invalid = await send_config_command("NonExistentPromptName123")
+    event_invalid.reply.assert_called_with("❌ Prompt 'NonExistentPromptName123' not found.")
+
+
+async def test_config_group_model_settings(
+        db_session, command_handlers, monitored_group: MonitoredGroup, setup_queue_test
+        # setup_queue_test for default model
+):
+    """Tests configuration of group-specific LLM model."""
+    # Arrange
+    admin_user_id = TEST_SUPER_ADMIN_ID
+    chat_id_to_config = TEST_CHAT_ID
+
+    # Create a custom model for this test
+    custom_model_name = f"CustomGroupModel_{TEST_CHAT_ID}"
+    custom_model = LLMModel(name=custom_model_name, api_identifier="custom-group-api-v1", provider="OpenAI")
+    db_session.add(custom_model)
+    await db_session.flush()
+    custom_model_id = custom_model.id
+
+    async def send_config_command(value_str: str):
+        mock_event = MagicMock(
+            is_private=False, chat_id=chat_id_to_config, sender_id=admin_user_id,
+            text=f"/config_group group_model {value_str}", reply=AsyncMock()
+        )
+        await command_handlers.config_group_handler(mock_event)
+        return mock_event
+
+    # Test setting by ID
+    event_id = await send_config_command(str(custom_model_id))
+    await db_session.refresh(monitored_group)
+    assert monitored_group.custom_model_id == custom_model_id
+    event_id.reply.assert_called_with(
+        f"✅ Setting Updated! Group model set to: '{custom_model_name}' (ID: {custom_model_id}).")
+
+    # Test setting by Name
+    event_name = await send_config_command(f'"{custom_model_name}"')
+    await db_session.refresh(monitored_group)
+    assert monitored_group.custom_model_id == custom_model_id
+    event_name.reply.assert_called_with(
+        f"✅ Setting Updated! Group model set to: '{custom_model_name}' (ID: {custom_model_id}).")
+
+    # Test resetting to none/default
+    event_reset = await send_config_command("reset")
+    await db_session.refresh(monitored_group)
+    assert monitored_group.custom_model_id is None
+    event_reset.reply.assert_called_with("✅ Setting Updated! Group model reset to global default.")
+
+    # Test setting non-existent model
+    event_invalid = await send_config_command("NonExistentModelName456")
+    event_invalid.reply.assert_called_with("❌ Model 'NonExistentModelName456' not found.")
+
+
+async def test_config_group_error_conditions(
+        db_session, command_handlers, monitored_group: MonitoredGroup
+):
+    """Tests various error conditions for /config_group command."""
+    # Arrange
+    admin_user_id = TEST_SUPER_ADMIN_ID
+    chat_id_to_config = TEST_CHAT_ID
 
     async def send_config_command(command_text: str):
         mock_event = MagicMock(
@@ -271,123 +408,23 @@ async def test_config_group_command(
         await command_handlers.config_group_handler(mock_event)
         return mock_event
 
-    group = await db_session.get(MonitoredGroup, chat_id_to_config) # Get initial group state
-    # Initial state for approval_required from monitored_group fixture is False.
-    assert group.require_admin_approval_for_ban is False
+    # Test invalid value for delete_count
+    event_invalid_delete_count = await send_config_command("/config_group delete_count abc")
+    event_invalid_delete_count.reply.assert_called_with("Invalid number for delete_count. Must be 0 or greater.")
 
-    # Test 'approval_required'
-    event = await send_config_command("/config_group approval_required true")
-    await db_session.refresh(group) # Refresh the group object from DB
-    assert group.require_admin_approval_for_ban is True
-    event.reply.assert_called_with("✅ Setting Updated! Admin approval for bans set to: True")
-
-    event = await send_config_command("/config_group approval_required false")
-    await db_session.refresh(group)
-    assert group.require_admin_approval_for_ban is False
-    event.reply.assert_called_with("✅ Setting Updated! Admin approval for bans set to: False")
-
-    # Test 'preban_message' (initial state True from fixture)
-    await db_session.refresh(group) # Refresh before checking initial state if modified by other parts of test
-    assert group.pre_ban_message_enabled is True # Default from fixture
-    event = await send_config_command("/config_group preban_message false")
-    await db_session.refresh(group)
-    assert group.pre_ban_message_enabled is False
-    event.reply.assert_called_with("✅ Setting Updated! Pre-ban notification message set to: False")
-
-    # Test 'delete_messages' (initial state True from fixture)
-    await db_session.refresh(group)
-    assert group.delete_recent_messages_on_ban is True # Default from fixture
-    event = await send_config_command("/config_group delete_messages false")
-    await db_session.refresh(group)
-    assert group.delete_recent_messages_on_ban is False
-    event.reply.assert_called_with("✅ Setting Updated! Deletion of recent messages on ban set to: False")
-
-    # Test 'delete_count' (initial state 1 from fixture)
-    await db_session.refresh(group)
-    assert group.num_messages_to_delete_on_ban == 1 # Default from fixture
-    event = await send_config_command("/config_group delete_count 5")
-    await db_session.refresh(group)
-    assert group.num_messages_to_delete_on_ban == 5
-    event.reply.assert_called_with("✅ Setting Updated! Number of messages to delete on ban set to: 5")
-
-    event = await send_config_command("/config_group delete_count abc") # Invalid
-    event.reply.assert_called_with("Invalid number for delete_count. Must be 0 or greater.")
-
-    # Test 'group_prompt'
-    new_prompt_name = "Custom Group Prompt TestConfig"
-    # Ensure this prompt doesn't exist or use a unique name logic if needed
-    existing_custom_prompt = await db_session.scalar(select(Prompt).where(Prompt.name == new_prompt_name))
-    if existing_custom_prompt:
-        # It's better to ensure test isolation by not deleting, but if tests run sequentially and this name is reused.
-        # This part might be problematic if the prompt is referenced elsewhere.
-        # For this specific test, let's assume it's okay or use an even more unique name.
-        await db_session.delete(existing_custom_prompt)
-        await db_session.flush()
-
-    new_prompt = Prompt(name=new_prompt_name, text="Custom CFG: {message_text}")
-    db_session.add(new_prompt)
-    await db_session.flush()
-    new_prompt_id = new_prompt.id
-
-    event = await send_config_command(f"/config_group group_prompt {new_prompt_id}")
-    await db_session.refresh(group)
-    assert group.custom_prompt_id == new_prompt_id
-    event.reply.assert_called_with(f"✅ Setting Updated! Group prompt set to: '{new_prompt.name}' (ID: {new_prompt_id}).")
-
-    event = await send_config_command(f"/config_group group_prompt \"{new_prompt.name}\"") # By name with spaces
-    await db_session.refresh(group)
-    assert group.custom_prompt_id == new_prompt_id
-    event.reply.assert_called_with(f"✅ Setting Updated! Group prompt set to: '{new_prompt.name}' (ID: {new_prompt_id}).")
-
-
-    event = await send_config_command("/config_group group_prompt none")
-    await db_session.refresh(group)
-    assert group.custom_prompt_id is None
-    event.reply.assert_called_with("✅ Setting Updated! Group prompt reset to global default.")
-
-    event = await send_config_command("/config_group group_prompt NonExistentPrompt") # Invalid
-    event.reply.assert_called_with("❌ Prompt 'NonExistentPrompt' not found.")
-
-    # Test 'group_model'
-    new_model_name = "Custom Group Model TestConfig"
-    existing_custom_model = await db_session.scalar(select(LLMModel).where(LLMModel.name == new_model_name))
-    if existing_custom_model:
-        await db_session.delete(existing_custom_model)
-        await db_session.flush()
-
-    new_model = LLMModel(name=new_model_name, api_identifier="custom-cfg-api", provider="OpenAI") # Unique name
-    db_session.add(new_model)
-    await db_session.flush()
-    new_model_id = new_model.id
-
-    event = await send_config_command(f"/config_group group_model {new_model_id}")
-    await db_session.refresh(group)
-    assert group.custom_model_id == new_model_id
-    event.reply.assert_called_with(f"✅ Setting Updated! Group model set to: '{new_model.name}' (ID: {new_model_id}).")
-
-    event = await send_config_command(f"/config_group group_model \"{new_model.name}\"")
-    await db_session.refresh(group)
-    assert group.custom_model_id == new_model_id
-    event.reply.assert_called_with(f"✅ Setting Updated! Group model set to: '{new_model.name}' (ID: {new_model_id}).")
-
-
-    event = await send_config_command("/config_group group_model reset")
-    await db_session.refresh(group)
-    assert group.custom_model_id is None
-    event.reply.assert_called_with("✅ Setting Updated! Group model reset to global default.")
-
-    # Test invalid command
-    event = await send_config_command("/config_group unknown_setting value")
-    event.reply.assert_called_with("❓ Unknown setting 'unknown_setting'. See command help for available settings.")
+    # Test unknown setting
+    event_unknown_setting = await send_config_command("/config_group unknown_setting value")
+    event_unknown_setting.reply.assert_called_with(
+        "❓ Unknown setting 'unknown_setting'. See command help for available settings.")
 
     # Test insufficient arguments
-    event = await send_config_command("/config_group approval_required")
-    assert "Usage: /config_group <setting_name> <value>" in event.reply.call_args[0][0]
+    event_insufficient_args = await send_config_command("/config_group approval_required")
+    assert "Usage: /config_group <setting_name> <value>" in event_insufficient_args.reply.call_args[0][0]
 
 
 async def test_admin_denies_ban_reply_flow(
         db_session, mock_telegram_client, command_handlers, action_service,
-        monitored_group, new_user_in_group # setup_queue_test not needed here
+        monitored_group, new_user_in_group  # setup_queue_test not needed here
 ):
     """
     GIVEN a pending admin action for a ban
@@ -398,14 +435,14 @@ async def test_admin_denies_ban_reply_flow(
     admin_user_id = TEST_SUPER_ADMIN_ID
     user_to_act_on = TEST_NEW_USER_ID
     original_chat_id = TEST_CHAT_ID
-    admin_notification_msg_id = 78901 # Arbitrary ID for the bot's message to admin
+    admin_notification_msg_id = 78901  # Arbitrary ID for the bot's message to admin
 
     # Create a PendingAdminAction record
     pending_action = PendingAdminAction(
         admin_message_id=admin_notification_msg_id,
         user_to_act_on_id=user_to_act_on,
         original_chat_id=original_chat_id,
-        original_message_id=12345, # Arbitrary
+        original_message_id=12345,  # Arbitrary
         message_text_preview="This is spam, please ban.",
         proposed_action="ban",
         llm_reason_for_action="LLM detected spam."
@@ -426,21 +463,14 @@ async def test_admin_denies_ban_reply_flow(
     await command_handlers.admin_reply_handler(mock_admin_reply_no)
 
     # Assert
-    db_session.expire_all() # Ensure fresh read
+    db_session.expire_all()  # Ensure fresh read
 
-    # User should be removed from NewUser (approved)
-    new_user_record = await db_session.get(NewUser, {"user_id": user_to_act_on, "chat_id": original_chat_id})
-    assert new_user_record is None, "NewUser record was not deleted after admin denied ban."
+    # User should be approved
+    await assert_user_approved(db_session, user_to_act_on, original_chat_id)
 
     # PendingAdminAction should be removed
     pending_action_record_after = await db_session.get(PendingAdminAction, pending_action_id)
     assert pending_action_record_after is None, "PendingAdminAction was not deleted."
-
-    # User should NOT be banned
-    banned_user_record = await db_session.scalar(
-        select(BannedUser).where(BannedUser.user_id == user_to_act_on, BannedUser.chat_id == original_chat_id)
-    )
-    assert banned_user_record is None, "User was incorrectly banned."
 
     mock_admin_reply_no.reply.assert_called_with(
         f"Action denied for user {user_to_act_on}. User marked as approved for now."

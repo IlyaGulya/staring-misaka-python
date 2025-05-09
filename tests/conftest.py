@@ -19,11 +19,11 @@ from staring_misaka.config import QueueSettings, Settings
 
 import asyncio  # For main_event_loop
 import staring_misaka.web_ui as web_ui_module  # Import the module itself
-from staring_misaka.config import Settings
 
 # Import necessary items for db_engine fixture
 from staring_misaka.db_models import (  # FIX: Add LLMModel and Prompt
     Base,
+    BannedUser, # Added for assert_user_banned helper
     GlobalBotSettings,
     LLMModel,
     MonitoredGroup,
@@ -35,6 +35,8 @@ from staring_misaka.db_utils import init_db as actual_init_db
 from staring_misaka.db_utils import initialize_default_data as actual_initialize_default_data
 from staring_misaka.event_handlers import EventHandlers
 from staring_misaka.llm_service import LLMService
+from staring_misaka.dto import LLMSpamAnalysisResult # For mock_llm_service_spam/non_spam
+
 
 # Use a separate in-memory SQLite for testing
 TEST_DB_URL = "sqlite+aiosqlite:///file:memdb_test?mode=memory&uri=true"
@@ -47,6 +49,12 @@ TEST_NEW_USER_ID = 4
 TEST_BOT_ID = 123456789
 TEST_CHAT_ID = -1001234567890
 TEST_CHAT_ID_2 = -1009876543210
+EXAMPLE_MESSAGE_ID = 1000 # Generic message ID base if needed
+
+# Message text constants
+SPAM_MESSAGE_TEXT = "Check out my amazing site! www.spam.com"
+NON_SPAM_MESSAGE_TEXT = "Hello everyone, interesting topic!"
+
 
 # Configure logging for tests
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -74,7 +82,7 @@ test_logger.info(
 )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def test_settings() -> Settings:
     """Override settings for testing."""
     test_logger.info("Creating test settings...")
@@ -91,7 +99,7 @@ def test_settings() -> Settings:
     )
 
 
-@pytest_asyncio.fixture(scope="function")
+@pytest_asyncio.fixture
 async def db_engine(test_settings):
     """
     Initializes db_utils for the application code, creates the test database engine,
@@ -204,6 +212,10 @@ def mock_telegram_client(test_settings) -> MagicMock:
         if entity_id in (TEST_CHAT_ID, TEST_CHAT_ID_2): return MagicMock(spec=Channel, id=entity_id,
                                                                          title=f"Test Group {entity_id}",
                                                                          username=f"testgroup_{abs(entity_id)}")
+        # Allow mocking for other user IDs dynamically if needed by tests (e.g. queue tests)
+        if isinstance(entity_id, int) and entity_id > TEST_NEW_USER_ID : # For dynamically created users in tests
+            return MagicMock(spec=TelegramUser, id=entity_id, username=f"DynamicUser{entity_id}",
+                             first_name="Dynamic", last_name=f"User{entity_id}", bot=False)
         return None
 
     client.get_entity = AsyncMock(side_effect=mock_get_entity)
@@ -231,14 +243,15 @@ def mock_llm_service(test_settings, mock_telegram_client) -> MagicMock:
     """
     test_logger.debug("Creating mock LLM service...")
     mock_service = MagicMock(spec=LLMService)
-    default_result = MagicMock()
-    default_result.is_spam = False
-    default_result.reason = "Looks okay."
-    default_result.input_tokens = 10
-    default_result.output_tokens = 2
-    default_result.model_name_used = "mock-model-v1"
-    default_result.status = "success"
-    default_result.error_message = None
+    default_result = LLMSpamAnalysisResult( # Use DTO for default result
+        is_spam=False,
+        reason="Looks okay.",
+        input_tokens=10,
+        output_tokens=2,
+        model_name_used="mock-model-v1",
+        status="success",
+        error_message=None
+    )
     mock_service.analyze_message_for_spam = AsyncMock(return_value=default_result)
     mock_service.reprocess_queued_item = AsyncMock(return_value=True)
     mock_service.process_llm_queue_batch = AsyncMock(return_value=0)
@@ -247,6 +260,35 @@ def mock_llm_service(test_settings, mock_telegram_client) -> MagicMock:
     mock_service._get_active_prompt_and_model = AsyncMock(
         return_value=(MagicMock(id=1), MagicMock(id=1, provider="Anthropic", api_identifier="test-model"))
     )
+    return mock_service
+
+@pytest.fixture
+def mock_llm_service_spam(test_settings, mock_telegram_client) -> MagicMock:
+    """Provides a mocked LLMService that always returns 'spam'."""
+    test_logger.debug("Creating mock LLM service (always spam)...")
+    mock_service = MagicMock(spec=LLMService)
+    spam_result = LLMSpamAnalysisResult(
+        is_spam=True, reason="Mocked: Spam detected",
+        input_tokens=20, output_tokens=5, model_name_used="mock-spam-model-v1", status="success"
+    )
+    mock_service.analyze_message_for_spam = AsyncMock(return_value=spam_result)
+    # Mock other methods if needed by tests using this fixture
+    mock_service.reprocess_queued_item = AsyncMock(return_value=True)
+    mock_service.process_llm_queue_batch = AsyncMock(return_value=0)
+    return mock_service
+
+@pytest.fixture
+def mock_llm_service_non_spam(test_settings, mock_telegram_client) -> MagicMock:
+    """Provides a mocked LLMService that always returns 'not spam'."""
+    test_logger.debug("Creating mock LLM service (always not spam)...")
+    mock_service = MagicMock(spec=LLMService)
+    non_spam_result = LLMSpamAnalysisResult(
+        is_spam=False, reason="Mocked: Looks okay",
+        input_tokens=15, output_tokens=3, model_name_used="mock-nonspam-model-v1", status="success"
+    )
+    mock_service.analyze_message_for_spam = AsyncMock(return_value=non_spam_result)
+    mock_service.reprocess_queued_item = AsyncMock(return_value=True)
+    mock_service.process_llm_queue_batch = AsyncMock(return_value=0)
     return mock_service
 
 
@@ -274,6 +316,7 @@ def event_handlers(test_settings, mock_telegram_client, real_llm_service, action
     """
     Provides an EventHandlers instance using the REAL LLMService.
     API calls within LLMService will need mocking at the strategy level in specific tests.
+    For tests needing a fully mocked LLMService for EventHandlers, construct EventHandlers locally in the test.
     """
     test_logger.debug("Creating Event Handlers with REAL LLM Service...")
     handlers = EventHandlers(
@@ -304,8 +347,8 @@ def command_handlers(test_settings, mock_telegram_client, action_service, event_
 # --- Helper Fixtures ---
 
 @pytest_asyncio.fixture
-async def monitored_group(db_session, test_settings, request) -> AsyncGenerator[None, None]:
-    """Ensures the default test group exists in the DB for a test."""
+async def monitored_group(db_session, test_settings, request) -> MonitoredGroup: # Return MonitoredGroup
+    """Ensures the default test group exists in the DB for a test and returns it."""
     test_name = request.node.name
     test_logger.debug(f"[{test_name}] Ensuring monitored group {TEST_CHAT_ID} exists...")
     group = await db_session.get(MonitoredGroup, TEST_CHAT_ID)
@@ -324,14 +367,39 @@ async def monitored_group(db_session, test_settings, request) -> AsyncGenerator[
         test_logger.debug(f"[{test_name}] Monitored group {TEST_CHAT_ID} created and flushed.")
     else:
         test_logger.debug(f"[{test_name}] Monitored group {TEST_CHAT_ID} already exists.")
-    yield
+    yield group # Yield the group object
     test_logger.debug(f"[{test_name}] Teardown for monitored_group fixture.")
     # Cleanup is handled by db_session rollback
 
+@pytest_asyncio.fixture
+async def setup_monitored_group_with_config(db_session, test_settings, request,
+                                            require_admin_approval: bool = True) -> MonitoredGroup:
+    """Creates a monitored group with specific admin approval configuration."""
+    test_name = request.node.name
+    test_logger.debug(
+        f"[{test_name}] Setting up monitored group {TEST_CHAT_ID} with require_admin_approval={require_admin_approval}")
+    group = await db_session.get(MonitoredGroup, TEST_CHAT_ID)
+    if group: # If it exists, update it
+        group.require_admin_approval_for_ban = require_admin_approval
+    else: # If not, create it
+        group = MonitoredGroup(
+            chat_id=TEST_CHAT_ID,
+            added_by_user_id=TEST_SUPER_ADMIN_ID,
+            require_admin_approval_for_ban=require_admin_approval,
+            pre_ban_message_enabled=True, # Default sensible values
+            delete_recent_messages_on_ban=True,
+            num_messages_to_delete_on_ban=1
+        )
+        db_session.add(group)
+    await db_session.flush()
+    test_logger.debug(f"[{test_name}] Monitored group {TEST_CHAT_ID} configured and flushed.")
+    yield group
+    test_logger.debug(f"[{test_name}] Teardown for setup_monitored_group_with_config fixture.")
+
 
 @pytest_asyncio.fixture
-async def new_user_in_group(db_session, monitored_group, request) -> AsyncGenerator[None, None]:
-    """Ensures the test new user exists in the NewUser table for the default group."""
+async def new_user_in_group(db_session, monitored_group, request) -> NewUser: # Return NewUser
+    """Ensures the test new user exists in the NewUser table for the default group and returns it."""
     test_name = request.node.name
     user_key = {"user_id": TEST_NEW_USER_ID, "chat_id": TEST_CHAT_ID}  # Use dict for composite PK lookup
     test_logger.debug(f"[{test_name}] Ensuring new user {user_key} exists...")
@@ -344,7 +412,7 @@ async def new_user_in_group(db_session, monitored_group, request) -> AsyncGenera
         test_logger.debug(f"[{test_name}] New user {user_key} created and flushed.")
     else:
         test_logger.debug(f"[{test_name}] New user {user_key} already exists.")
-    yield
+    yield user # Yield the user object
     test_logger.debug(f"[{test_name}] Teardown for new_user_in_group fixture.")
     # Cleanup is handled by db_session rollback
 
@@ -421,7 +489,7 @@ async def setup_queue_test(db_session, monitored_group, new_user_in_group):
     yield prompt, model
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)  # Autouse to ensure it runs for all tests in modules using it
+@pytest_asyncio.fixture(autouse=True)  # Autouse to ensure it runs for all tests in modules using it
 async def setup_web_ui_globals(
         test_settings: Settings,
         real_llm_service: LLMService,  # Or mock_llm_service if preferred for some tests
@@ -448,3 +516,54 @@ async def setup_web_ui_globals(
     web_ui_module._main_event_loop = None
     web_ui_module._llm_service_instance = None
     web_ui_module._action_service_instance = None
+
+# --- Assertion Helpers ---
+async def assert_user_banned_with_details(
+    db_session: AsyncSession,
+    client: MagicMock,
+    user_id: int,
+    chat_id: int,
+    expected_reason_substring: str,
+    expected_bot_id: int,
+    expected_deleted_message_ids: list[int] | None = None,
+):
+    """Asserts that a user is banned, with checks for DB record, Telegram calls, and NewUser removal."""
+    db_session.expire_all() # Ensure we read fresh data after handler's commit
+
+    banned_user_record = await db_session.scalar(
+        select(BannedUser).where(BannedUser.user_id == user_id, BannedUser.chat_id == chat_id)
+    )
+    assert banned_user_record is not None, f"BannedUser record for user {user_id} in chat {chat_id} not found"
+    assert banned_user_record.banned_by_user_id == expected_bot_id, "Banned by user ID mismatch"
+    assert expected_reason_substring in banned_user_record.reason, f"Expected reason substring '{expected_reason_substring}' not in '{banned_user_record.reason}'"
+
+    client.kick_participant.assert_called_once_with(chat_id, user_id)
+
+    if expected_deleted_message_ids:
+        # Sort both lists to ensure order doesn't affect assertion
+        actual_deleted_ids_args = client.delete_messages.call_args
+        assert actual_deleted_ids_args is not None, "delete_messages was not called"
+        actual_deleted_ids = sorted(actual_deleted_ids_args[0][1])
+        expected_sorted_ids = sorted(expected_deleted_message_ids)
+        client.delete_messages.assert_called_once_with(chat_id, expected_sorted_ids)
+    else:
+        client.delete_messages.assert_not_called()
+
+    new_user_check = await db_session.get(NewUser, {"user_id": user_id, "chat_id": chat_id})
+    assert new_user_check is None, "NewUser record was not deleted after ban"
+
+async def assert_user_approved(
+    db_session: AsyncSession,
+    user_id: int,
+    chat_id: int,
+):
+    """Asserts that a user is approved (not banned, removed from NewUser)."""
+    db_session.expire_all() # Ensure we read fresh data after handler's commit
+
+    new_user_record = await db_session.get(NewUser, {"user_id": user_id, "chat_id": chat_id})
+    assert new_user_record is None, "NewUser record was not deleted after approval"
+
+    banned_user_record = await db_session.scalar(
+        select(BannedUser).where(BannedUser.user_id == user_id, BannedUser.chat_id == chat_id)
+    )
+    assert banned_user_record is None, "User was incorrectly banned after approval"

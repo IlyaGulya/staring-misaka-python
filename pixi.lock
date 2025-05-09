@@ -2697,7 +2697,7 @@ packages:
 - pypi: .
   name: staring-misaka
   version: 0.2.0
-  sha256: 26463342ac4b1ef8edbec4089fbbed61cf601b013391bcb1d63918a5f2f3c45b
+  sha256: 583990248ec9e9f646ad4a7271c7be4e8d14dce4b9c2ca66b37dd6f28425aeb8
   requires_dist:
   - telethon==1.40.0
   - instructor==1.8.1
