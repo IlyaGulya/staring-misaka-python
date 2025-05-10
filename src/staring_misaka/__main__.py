@@ -64,15 +64,15 @@ async def main():
     await event_handlers.update_monitored_chats_cache()  # Perform initial load of monitored chats
     logger.info("All services initialized and Telegram handlers registered.")
 
-    # 6. Launch Gradio Web UI (if configured with auth)
-    # We get the current event loop here to pass to Gradio UI if needed for thread-safe async calls
-    current_loop = asyncio.get_running_loop()
+    # 6. Launch Gradio Web UI (if configured)
+    gradio_server_task = None # Initialize
     if settings.gradio_username and settings.gradio_password and settings.gradio_password.get_secret_value():
-        launch_gradio_ui(
+        # launch_gradio_ui is now async and returns a task to be managed
+        gradio_server_task = await launch_gradio_ui(
             settings=settings,
             llm_service=llm_service,         # Pass LLMService
             action_service=action_service,   # Pass ActionService
-            main_event_loop=current_loop
+            # main_event_loop is no longer passed as it runs in the same loop
         )
     else:
         logger.info("Gradio UI not launched due to missing username/password configuration.")
@@ -81,6 +81,9 @@ async def main():
     # --- Background Tasks ---
     # List to keep track of background tasks for graceful shutdown
     background_tasks = []
+    if gradio_server_task: # Add Gradio task if it was created
+        background_tasks.append(gradio_server_task)
+
     try:
         logger.info("Connecting to Telegram...")
         await client.start(bot_token=settings.bot_token.get_secret_value())  # Start as a bot
@@ -122,8 +125,11 @@ async def main():
         llm_queue_task.set_name("LLMQueueProcessor")
         background_tasks.append(llm_queue_task)
 
-        logger.info(f"Started {len(background_tasks)} background tasks: {[t.get_name() for t in background_tasks]}.")
-
+        if background_tasks: # Check if there are any tasks to log
+            logger.info(f"Started {len(background_tasks)} background tasks: {[t.get_name() for t in background_tasks]}.")
+        else:
+            # This case should ideally not happen if other tasks are always started
+            logger.info("No background tasks (including Gradio) were started.")
         # Keep the bot running until it's disconnected (e.g., by Ctrl+C or an error)
         await client.run_until_disconnected()
 

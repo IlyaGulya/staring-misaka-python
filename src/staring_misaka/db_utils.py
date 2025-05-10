@@ -57,79 +57,106 @@ async def create_tables():
 
 async def initialize_default_data(settings: Settings):
     async with get_db_session() as session:
+        # 1. GlobalBotSettings
         gs = await session.get(GlobalBotSettings, 1)
         if not gs:
             gs = GlobalBotSettings(id=1, super_admin_id=settings.admin_id)
             session.add(gs)
             logger.info(f"Initialized GlobalBotSettings: super_admin_id={settings.admin_id}")
+            await session.flush()  # Ensure gs has an ID if new, for FK constraints
         elif gs.super_admin_id != settings.admin_id:
             logger.warning(
-                f"Super admin ID in DB ({gs.super_admin_id}) differs from config ({settings.admin_id}). Keeping DB value.")
-        await session.flush()
+                f"Super admin ID in DB ({gs.super_admin_id}) differs from config ({settings.admin_id}). Keeping DB value."
+            )
 
-        # --- Robust Default Prompt Setup ---
-        target_default_prompt_name = "Global Default Spam Check"
-        # Try to find the canonical default prompt
-        default_prompt = await session.scalar(select(Prompt).where(Prompt.name == target_default_prompt_name))
-
-        if not default_prompt:
-            # If it doesn't exist, create it.
-            default_prompt = Prompt(
-                name=target_default_prompt_name,
-                text=(
-                    "Analyze the following message. Is it spam? If yes, provide a very brief (under 100 characters) "
-                    "reason for the ban, suitable for public display in a chat group. "
-                    "The chat group is for general discussion, but unsolicited advertising, "
-                    "scams, or irrelevant content are considered spam.\n\n<message>\n{message_text}\n</message>"
-                ),
-                is_global_default=False, # Will be set to True below
+        # 2. Ensure Canonical Prompt ("Global Default Spam Check") Exists
+        canonical_prompt_name = "Global Default Spam Check"
+        canonical_prompt_text = (
+            "Analyze the following message. Is it spam? If yes, provide a very brief (under 100 characters) "
+            "reason for the ban, suitable for public display in a chat group. "
+            "The chat group is for general discussion, but unsolicited advertising, "
+            "scams, or irrelevant content are considered spam.\n\n<message>\n{message_text}\n</message>"
+        )
+        canonical_prompt = await session.scalar(select(Prompt).where(Prompt.name == canonical_prompt_name))
+        if not canonical_prompt:
+            canonical_prompt = Prompt(
+                name=canonical_prompt_name,
+                text=canonical_prompt_text,
+                is_global_default=False,  # Default to False, logic below will manage it
                 created_at=datetime.datetime.now(timezone.utc)
             )
-            session.add(default_prompt)
-            await session.flush() # Ensure ID is available for default_prompt
-            logger.info(f"Created new canonical default prompt: '{default_prompt.name}' (ID: {default_prompt.id}).")
+            session.add(canonical_prompt)
+            await session.flush()
+            logger.info(f"Created canonical prompt: '{canonical_prompt.name}' (ID: {canonical_prompt.id}).")
 
-        # Unset is_global_default for all other prompts
+        # 3. Determine and Set Global Default Prompt in GlobalBotSettings and Prompt table
+        active_default_prompt_id_to_set = None
+        user_chosen_default_prompt = None
+
+        if gs.default_prompt_id:
+            user_chosen_default_prompt = await session.get(Prompt, gs.default_prompt_id)
+            if user_chosen_default_prompt:
+                active_default_prompt_id_to_set = user_chosen_default_prompt.id
+                logger.info(f"Preserving user-configured global default prompt: '{user_chosen_default_prompt.name}' (ID: {user_chosen_default_prompt.id}).")
+            else:
+                logger.warning(f"GlobalSettings.default_prompt_id ({gs.default_prompt_id}) points to a non-existent prompt. Will reset to canonical.")
+                gs.default_prompt_id = None # Clear invalid ID
+
+        if not active_default_prompt_id_to_set: # No valid user default, or gs.default_prompt_id was initially None
+            active_default_prompt_id_to_set = canonical_prompt.id
+            gs.default_prompt_id = canonical_prompt.id # Update GlobalSettings
+            logger.info(f"Setting canonical prompt '{canonical_prompt.name}' (ID: {canonical_prompt.id}) as global default.")
+
+        # Ensure the chosen active default prompt has its is_global_default flag set to True
+        # and all other prompts have it set to False.
         await session.execute(
             update(Prompt)
-            .where(Prompt.id != default_prompt.id)
+            .where(Prompt.id == active_default_prompt_id_to_set)
+            .values(is_global_default=True)
+        )
+        await session.execute(
+            update(Prompt)
+            .where(Prompt.id != active_default_prompt_id_to_set)
             .values(is_global_default=False)
         )
-        # Set the canonical prompt as the global default
-        default_prompt.is_global_default = True
-        gs.default_prompt_id = default_prompt.id # Assign ID to GlobalSettings
-        logger.info(f"Ensured '{default_prompt.name}' (ID: {default_prompt.id}) is the global default prompt in GlobalSettings.")
-        await session.flush() # Ensure changes to gs and prompt are persisted before commit
+        await session.flush()
 
-        # --- Default Model Setup ---
-        target_default_model_name = "Claude 3 Haiku"
-        target_default_api_id = "claude-3-haiku-20240307"
-        target_default_provider = "Anthropic"
 
-        # Find or create the canonical default model
-        default_model = await session.scalar(
-            select(LLMModel).where(LLMModel.name == target_default_model_name,
-                                   LLMModel.api_identifier == target_default_api_id,
-                                   LLMModel.provider == target_default_provider)
+        # 4. Ensure Canonical LLM Model ("Claude 3 Haiku") Exists
+        canonical_model_name = "Claude 3 Haiku"
+        canonical_model_api_id = "claude-3-haiku-20240307"
+        canonical_model_provider = "Anthropic"
+
+        canonical_model = await session.scalar(
+            select(LLMModel).where(LLMModel.name == canonical_model_name,
+                                   LLMModel.api_identifier == canonical_model_api_id,
+                                   LLMModel.provider == canonical_model_provider)
         )
-        if not default_model:
-            default_model = LLMModel(name=target_default_model_name, api_identifier=target_default_api_id,
-                                     provider=target_default_provider,
-                                     created_at=datetime.datetime.now(timezone.utc))
-            session.add(default_model)
-            await session.flush() # Ensure ID for default_model
-            logger.info(f"Created default LLMModel entry: {default_model.name} (ID: {default_model.id}).")
+        if not canonical_model:
+            canonical_model = LLMModel(name=canonical_model_name, api_identifier=canonical_model_api_id,
+                                       provider=canonical_model_provider,
+                                       created_at=datetime.datetime.now(timezone.utc))
+            session.add(canonical_model)
+            await session.flush()
+            logger.info(f"Created canonical LLMModel: '{canonical_model.name}' (ID: {canonical_model.id}).")
 
-        # Ensure GlobalSettings points to this canonical default model
-        # If gs.default_model_id is already set, we check if it's valid.
-        # If it's not our canonical default, we still override it to ensure the canonical one is set.
-        if gs.default_model_id != default_model.id:
-            logger.info(f"Resetting GlobalSettings.default_model_id from {gs.default_model_id} to canonical default '{default_model.name}' (ID: {default_model.id}).")
-            gs.default_model_id = default_model.id
+        # 5. Determine and Set Global Default Model in GlobalBotSettings
+        user_chosen_default_model = None
+        if gs.default_model_id:
+            user_chosen_default_model = await session.get(LLMModel, gs.default_model_id)
+            if user_chosen_default_model:
+                logger.info(f"Preserving user-configured global default model: '{user_chosen_default_model.name}' (ID: {user_chosen_default_model.id}).")
+            else:
+                logger.warning(f"GlobalSettings.default_model_id ({gs.default_model_id}) points to a non-existent model. Will reset to canonical.")
+                gs.default_model_id = None # Clear invalid ID
 
-        await session.flush() # Ensure gs changes are persisted
+        if not gs.default_model_id: # No valid user default, or gs.default_model_id was initially None
+            gs.default_model_id = canonical_model.id # Update GlobalSettings
+            logger.info(f"Setting canonical model '{canonical_model.name}' (ID: {canonical_model.id}) as global default.")
 
-    logger.info("Default data initialization complete.")
+        await session.flush() # Persist any changes to gs
+
+    logger.info("Default data initialization complete (user configuration preserved where valid).")
 
 
 async def get_monitored_chat_ids() -> list[int]:

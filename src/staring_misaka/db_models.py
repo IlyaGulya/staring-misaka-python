@@ -1,3 +1,4 @@
+# src/staring_misaka/db_models.py
 import datetime
 from datetime import timezone  # For timezone-aware datetime objects
 from decimal import Decimal
@@ -6,7 +7,7 @@ from typing import Optional
 from sqlalchemy import (
     JSON,
     Boolean,
-    Date,
+    # Date, # No longer needed if ModelPricing is removed
     DateTime,
     ForeignKey,
     Integer,
@@ -66,24 +67,11 @@ class LLMModel(Base):
     __tablename__ = 'llm_models'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    api_identifier: Mapped[str] = mapped_column(String(100), nullable=False)
+    api_identifier: Mapped[str] = mapped_column(String(100), nullable=False) # Used to link to pricing_config.yaml
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=lambda: datetime.datetime.now(timezone.utc))
 
-
-class ModelPricing(Base):
-    __tablename__ = 'model_pricing'
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    model_id: Mapped[int] = mapped_column(ForeignKey('llm_models.id'), nullable=False)
-    input_price_per_million_tokens: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
-    output_price_per_million_tokens: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
-    currency: Mapped[str] = mapped_column(String(10), default="USD", nullable=False)
-    effective_from_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
-    effective_to_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
-
-    model: Mapped["LLMModel"] = relationship()
-    __table_args__ = (UniqueConstraint('model_id', 'effective_from_date', name='uq_model_pricing_period'),)
-
+# ModelPricing class is removed
 
 class NewUser(Base):
     __tablename__ = 'new_users'

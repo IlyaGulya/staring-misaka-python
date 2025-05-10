@@ -1,3 +1,4 @@
+# src/staring_misaka/llm_service.py
 import datetime
 import logging
 from abc import ABC, abstractmethod
@@ -14,12 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .action_service import ActionService
-from .config import Settings
+from .config import Settings, PricingPeriod  # Import PricingPeriod
 from .db_models import (
     GlobalBotSettings,
     LLMLog,
     LLMModel,
-    ModelPricing,
     MonitoredGroup,
     NewUser,
     Prompt,
@@ -35,7 +35,7 @@ from .metrics_service import (
 )
 from .telegram_utils import send_message_to_chat
 
-# TODO: Consider adding a common base exception for provider-specific API errors for easier catching.
+# TODO: Consider adding a common base exception for provider-specific API errors for easier catching. # Original Comment
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class AnthropicProviderStrategy(LLMProviderStrategy):
             # Using create_with_completion to get both parsed model and raw completion for token usage
             parsed_response, raw_completion = await self.client.messages.create_with_completion(
                 model=model_api_identifier,
-                max_tokens=256, # TODO: Consider making max_tokens configurable
+                max_tokens=256,  # TODO: Consider making max_tokens configurable # Original Comment
                 messages=[{"role": "user", "content": formatted_prompt}],
                 response_model=response_pydantic_model,
             )
@@ -158,7 +158,7 @@ class OpenAIProviderStrategy(LLMProviderStrategy):
                      "content": "You are a helpful assistant designed to output JSON according to the provided schema for spam detection."},
                     {"role": "user", "content": formatted_prompt}
                 ],
-                max_tokens=256, # TODO: Consider making max_tokens configurable
+                max_tokens=256,  # TODO: Consider making max_tokens configurable # Original Comment
             )
             input_tokens = raw_completion.usage.prompt_tokens if hasattr(raw_completion,
                                                                          'usage') and raw_completion.usage else 0
@@ -247,32 +247,43 @@ class LLMService:
         if not model_to_use: logger.warning(f"Could not determine active LLM model for chat {chat_id} (or globally).")
         return prompt_to_use, model_to_use
 
-    async def _get_model_pricing(self, session: AsyncSession, model_id: int,
-                                 timestamp: datetime.datetime) -> ModelPricing | None:
-        """Fetches the applicable pricing record for a given model ID and timestamp."""
-        # Selects the pricing record where the timestamp falls within the effective date range.
-        # Orders by effective_from_date descending to get the most recent applicable rate.
-        stmt = (
-            select(ModelPricing)
-            .where(ModelPricing.model_id == model_id)
-            .where(ModelPricing.effective_from_date <= timestamp.date())
-            .where((ModelPricing.effective_to_date.is_(None)) | (ModelPricing.effective_to_date >= timestamp.date()))
-            .order_by(ModelPricing.effective_from_date.desc())
-            .limit(1)
-        )
-        result = await session.execute(stmt)
-        return result.scalars().first()  # Returns the single most relevant pricing record or None
+    def _get_model_pricing_from_config(self, model_api_identifier: str,
+                                       timestamp: datetime.datetime) -> PricingPeriod | None:
+        """Fetches applicable pricing from the loaded YAML configuration."""
+        if not self.settings.loaded_pricing_config:
+            logger.debug("Pricing config not loaded in settings.")
+            return None
 
-    async def _calculate_cost(self, pricing: ModelPricing, input_tokens: int, output_tokens: int) -> Decimal:
-        """Calculates the estimated cost based on token counts and pricing information."""
+        for model_config_entry in self.settings.loaded_pricing_config.models:
+            if model_config_entry.model_api_identifier == model_api_identifier:
+                # Find the most recent applicable pricing period for this model
+                applicable_period = None
+                # Sort periods by effective_from_date descending to find the latest applicable one
+                for period in sorted(model_config_entry.pricing_periods, key=lambda p: p.effective_from_date,
+                                     reverse=True):
+                    if period.effective_from_date <= timestamp.date():  # Check if the period has started
+                        if period.effective_to_date is None or period.effective_to_date >= timestamp.date():  # Check if period has not ended
+                            applicable_period = period
+                            break  # Found the most current valid period
+                if applicable_period:
+                    logger.debug(f"Found pricing for {model_api_identifier}: {applicable_period}")
+                    return applicable_period
+                else:
+                    logger.debug(f"No active pricing period found for {model_api_identifier} at {timestamp.date()}.")
+                    return None  # No active period found for this timestamp
+        logger.debug(f"No pricing configuration found for model API identifier: {model_api_identifier}")
+        return None
+
+    async def _calculate_cost(self, pricing_period: PricingPeriod, input_tokens: int, output_tokens: int) -> tuple[
+        Decimal, str]:
+        """Calculates the estimated cost based on token counts and a specific pricing period."""
         cost = Decimal("0.0")
-        if pricing:  # Ensure pricing object exists
-            # Calculate cost based on price per million tokens
-            cost += (Decimal(input_tokens or 0) / Decimal("1000000")) * pricing.input_price_per_million_tokens
-            cost += (Decimal(output_tokens or 0) / Decimal("1000000")) * pricing.output_price_per_million_tokens
-        else:
-            logger.warning("Attempted to calculate cost but no valid pricing information was provided.")
-        return cost
+        # Use period's currency if specified, otherwise fallback to global default from pricing_config.yaml
+        currency = pricing_period.currency or self.settings.loaded_pricing_config.default_currency
+
+        cost += (Decimal(input_tokens or 0) / Decimal("1000000")) * pricing_period.input_price_per_million_tokens
+        cost += (Decimal(output_tokens or 0) / Decimal("1000000")) * pricing_period.output_price_per_million_tokens
+        return cost, currency
 
     async def _notify_admin_and_queue_check(
             self, session: AsyncSession, context: MessageContext, reason_for_failure: str,
@@ -402,16 +413,17 @@ class LLMService:
             log_entry.raw_response_payload = analysis_result_dto.model_dump_json(exclude_none=True)
             record_llm_tokens(active_model.api_identifier, log_entry.input_tokens, log_entry.output_tokens)
 
-            # Calculate and record estimated cost
-            pricing = await self._get_model_pricing(session, active_model.id, log_entry.timestamp)
-            if pricing:
-                cost = await self._calculate_cost(pricing, log_entry.input_tokens, log_entry.output_tokens)
+            # Calculate and record estimated cost using YAML config
+            pricing_period = self._get_model_pricing_from_config(active_model.api_identifier, log_entry.timestamp)
+            if pricing_period:
+                cost, currency = await self._calculate_cost(pricing_period, log_entry.input_tokens,
+                                                            log_entry.output_tokens)
                 log_entry.calculated_cost = cost
-                log_entry.cost_currency = pricing.currency
-                record_llm_cost(active_model.api_identifier, cost, pricing.currency)
+                log_entry.cost_currency = currency
+                record_llm_cost(active_model.api_identifier, cost, currency)
             else:
                 logger.warning(
-                    f"No pricing found for model {active_model.name} (ID: {active_model.id}) at timestamp {log_entry.timestamp}. Cost not calculated.")
+                    f"No pricing found in config for model API ID '{active_model.api_identifier}' at timestamp {log_entry.timestamp}. Cost not calculated.")
 
             logger.info(
                 f"LLM ({active_model.name} via {provider_name}) analysis successful: user {context.user_id}, chat {context.chat_id}, "
@@ -579,7 +591,7 @@ class LLMService:
                 ctx_data = queued_item.message_context_json or {}
                 admin_msg = (
                     f"🚫 Max Auto-Retries Reached 🚫\nItem ID: {queued_item.id}\nUser: {ctx_data.get('user_id', 'N/A')}\nChat: {ctx_data.get('chat_id', 'N/A')}\n"
-                    f"Reason: {queued_item.reason_for_queueing}\nStatus: pending_admin_action.\nUse /list_queued_checks, /reprocess_check {queued_item.id}, or /discard_check {queued_item.id}.")
+                    f"Reason: {queued_item.reason_for_queueing}\nStatus: pending_admin_action.\nUse Web UI Queue Mgmt.")  # Updated instruction for Web UI
                 try:
                     await send_message_to_chat(self.telegram_client, self.settings.admin_id, admin_msg)
                 except Exception as e_notify:
@@ -612,8 +624,6 @@ class LLMService:
             # For now, assume reprocess_queued_item handles its transactionality or relies on the outer session.
             if await self.reprocess_queued_item(session, item_id, action_service):  # Pass ActionService
                 successful_reprocessing_count += 1
-            # Optional: Add a small delay between processing items in a batch
-            # await asyncio.sleep(0.5)
 
         # Commits are handled by the get_db_session context manager in __main__.py loop
         logger.info(

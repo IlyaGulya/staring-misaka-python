@@ -1,0 +1,28 @@
+# pricing_config.yaml
+default_currency: "USD"
+
+# Define pricing for models based on their API identifiers
+# (the 'api_identifier' field from the llm_models table)
+models:
+  - model_api_identifier: "claude-3-haiku-20240307" # Matches your default model
+    pricing_periods:
+      - effective_from_date: "2024-01-01"
+        # effective_to_date: null # or omit for ongoing
+        input_price_per_million_tokens: 0.25
+        output_price_per_million_tokens: 1.25
+        # currency: "USD" # Optional, will use default_currency if not specified
+
+  - model_api_identifier: "claude-3-opus-20240229" # Example for another model
+    pricing_periods:
+      - effective_from_date: "2024-01-01"
+        input_price_per_million_tokens: 15.00
+        output_price_per_million_tokens: 75.00
+
+  - model_api_identifier: "gpt-4-turbo" # Example OpenAI model
+    pricing_periods:
+      - effective_from_date: "2023-11-01"
+        input_price_per_million_tokens: 10.00
+        output_price_per_million_tokens: 30.00
+
+  # Add more models and their pricing periods as needed
+  # Ensure model_api_identifier matches what's in your LLMModel table

@@ -17,7 +17,7 @@ import staring_misaka.db_utils as app_db_utils
 import staring_misaka.web_ui as web_ui_module  # Import the module itself
 from staring_misaka.action_service import ActionService
 from staring_misaka.command_handlers import CommandHandlers
-from staring_misaka.config import QueueSettings, Settings
+from staring_misaka.config import QueueSettings, Settings, PricingFile
 
 # Import necessary items for db_engine fixture
 from staring_misaka.db_models import (  # FIX: Add LLMModel and Prompt
@@ -25,7 +25,7 @@ from staring_misaka.db_models import (  # FIX: Add LLMModel and Prompt
     Base,
     GlobalBotSettings,
     LLMModel,
-    ModelPricing,  # Added for setup_queue_test
+    # ModelPricing, # Removed as pricing is now from YAML
     MonitoredGroup,
     NewUser,
     Prompt,
@@ -84,16 +84,31 @@ test_logger.info(
 def test_settings() -> Settings:
     """Override settings for testing."""
     test_logger.info("Creating test settings...")
+    # Create a dummy pricing config for tests if not loading from a test file
+    dummy_pricing_file = PricingFile(
+        default_currency="USD",
+        models=[
+            # Add a default pricing for common test models if needed
+            # For example, for the default "claude-3-haiku-20240307"
+            # This ensures LLMService can find pricing during tests
+        ]
+    )
     return Settings(
-        api_id=12345, api_hash="test_hash", bot_token="test_token", admin_id=TEST_SUPER_ADMIN_ID,
+        _env_file=None,
+        api_id=12345,
+        api_hash="test_hash",
+        bot_token="test_token",
+        admin_id=TEST_SUPER_ADMIN_ID,
         db_url=TEST_DB_URL,
         anthropic_api_key="test_anthropic_key",  # Provide dummy keys
         openai_api_key="test_openai_key",
         bot_session_path=":memory:",  # Use in-memory session for tests
         prometheus_port=8001,  # Different port
         log_level="DEBUG",  # This setting in Settings object is for app runtime, test logging is configured above
-        queue=QueueSettings(processing_interval_seconds=0.1, batch_size=2, max_automatic_retries=1)
+        queue=QueueSettings(processing_interval_seconds=0.1, batch_size=2, max_automatic_retries=1),
         # Faster queue for tests
+        pricing_config_file_path="non_existent_test_pricing.yaml", # Avoid loading real file unless intended
+        loaded_pricing_config=dummy_pricing_file # Provide a dummy loaded config
     )
 
 
@@ -461,26 +476,9 @@ async def setup_queue_test(db_session, monitored_group, new_user_in_group):
     model = test_model_obj
     test_logger.debug(
         f"Using/Set model for test: ID={model.id}, Name={model.name}, GS default_model_id now {gs.default_model_id}")
-
-    # Add default pricing for the model used in the test
-    today = datetime.date.today()
-    existing_pricing = await db_session.scalar(
-        select(ModelPricing)
-        .where(ModelPricing.model_id == model.id)
-        .where(ModelPricing.effective_from_date <= today)
-        .where((ModelPricing.effective_to_date.is_(None)) | (ModelPricing.effective_to_date >= today))
-    )
-    if not existing_pricing:
-        default_pricing = ModelPricing(
-            model_id=model.id,
-            input_price_per_million_tokens=Decimal("0.25"),
-            output_price_per_million_tokens=Decimal("1.25"),
-            currency="USD",
-            effective_from_date=today - datetime.timedelta(days=1),  # Ensure it's active
-            effective_to_date=None
-        )
-        db_session.add(default_pricing)
-        test_logger.debug(f"Added default pricing for model ID {model.id} for test setup.")
+    
+    # ModelPricing is no longer created in the DB here.
+    # Pricing will be read from the test_settings.loaded_pricing_config (if populated by a test pricing.yaml)
 
     await db_session.flush()
     test_logger.debug(f"Setup complete. Yielding prompt (ID={prompt.id}) and model (ID={model.id})")
