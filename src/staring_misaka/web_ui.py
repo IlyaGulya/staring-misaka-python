@@ -327,25 +327,33 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
 
         # --- Event Handlers for UI interactions ---
         def on_select_model_from_df(evt: gr.SelectData, df_data: pd.DataFrame):
-            logger.debug(f"Gradio on_select_model_from_df event: {evt}")
-            if evt.index is None or not isinstance(evt.index, tuple) or len(evt.index) == 0:
-                logger.debug("Gradio on_select_model_from_df: Invalid event index.")
-                return None, "", "", PROVIDER_CHOICES[0], gr.update(
-                    interactive=False)  # model_id, name, api_id, provider, edit_btn_interactive
+            try:
+                logger.info(f"Gradio on_select_model_from_df event: {evt}, df_data empty: {df_data.empty}")
+                if evt.index is None or not isinstance(evt.index, list) or len(evt.index) == 0:
+                    logger.info("Gradio on_select_model_from_df: Invalid event index or deselection.")
+                    return None, "", "", PROVIDER_CHOICES[0], gr.update(interactive=False)
 
-            selected_row_index = evt.index[0]
-            if not (0 <= selected_row_index < len(df_data)):
-                logger.error(f"Gradio on_select_model_from_df: Row index {selected_row_index} out of bounds.")
+                selected_row_index = evt.index[0]
+                if not (0 <= selected_row_index < len(df_data)):
+                    logger.error(f"Gradio on_select_model_from_df: Row index {selected_row_index} out of bounds for df_data len {len(df_data)}.")
+                    return None, "", "", PROVIDER_CHOICES[0], gr.update(interactive=False)
+
+                selected_row = df_data.iloc[selected_row_index]
+                model_id = selected_row.get("ID")
+                name_val = selected_row.get("Name", "")
+                api_id_val = selected_row.get("API Identifier", "")
+                provider_val = selected_row.get("Provider", PROVIDER_CHOICES[0])
+
+                if model_id is pd.NA or model_id is None:
+                    logger.warning(f"Gradio on_select_model_from_df: Selected model_id is {model_id}. Treating as invalid selection for edit.")
+                    return None, name_val, api_id_val, provider_val, gr.update(interactive=False)
+
+                logger.info(
+                    f"Gradio on_select_model_from_df: Selected ID={model_id}, Name='{name_val}'. Enabling edit button.")
+                return model_id, name_val, api_id_val, provider_val, gr.update(interactive=True)
+            except Exception as e:
+                logger.error(f"Error in on_select_model_from_df: {e}", exc_info=True)
                 return None, "", "", PROVIDER_CHOICES[0], gr.update(interactive=False)
-
-            selected_row = df_data.iloc[selected_row_index]
-            model_id = selected_row["ID"]
-            name_val = selected_row["Name"]
-            api_id_val = selected_row["API Identifier"]
-            provider_val = selected_row["Provider"]
-            logger.debug(
-                f"Gradio on_select_model_from_df: Selected ID={model_id}, Name='{name_val}'. Enabling edit button.")
-            return model_id, name_val, api_id_val, provider_val, gr.update(interactive=True)
 
         async def save_model_action(editing_id, name, api_id, provider):
             if editing_id is not None:  # Edit mode
@@ -610,20 +618,32 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         selected_prompt_id_state = gr.State(None)
 
         def on_select_prompt(evt: gr.SelectData, df_data: pd.DataFrame):
-            # This function now just needs to extract data for the edit form.
-            # The actual showing/hiding of forms is handled by other button clicks.
-            if evt.index is None or not isinstance(evt.index, tuple) or len(evt.index) == 0:
-                return None, "", "", gr.update(interactive=False)  # prompt_id, name, full_text, edit_button_interactive
+            try:
+                logger.debug(f"Gradio on_select_prompt event: {evt}, df_data empty: {df_data.empty}")
+                if evt.index is None or not isinstance(evt.index, list) or len(evt.index) == 0:
+                    logger.debug("Gradio on_select_prompt: Invalid event index or deselection.")
+                    return None, "", "", gr.update(interactive=False)
 
-            selected_row_index = evt.index[0]
-            if not (0 <= selected_row_index < len(df_data)):
+                selected_row_index = evt.index[0]
+                if not (0 <= selected_row_index < len(df_data)):
+                    logger.error(f"Gradio on_select_prompt: Row index {selected_row_index} out of bounds for df_data len {len(df_data)}.")
+                    return None, "", "", gr.update(interactive=False)
+
+                selected_row = df_data.iloc[selected_row_index]
+                prompt_id = selected_row.get("ID")
+                name_val = selected_row.get("Name", "")
+                full_text_content = selected_row.get("Full Text", selected_row.get("Text (Preview)", ""))
+
+                if prompt_id is pd.NA or prompt_id is None:
+                    logger.warning(f"Gradio on_select_prompt: Selected prompt_id is {prompt_id}. Treating as invalid selection for edit.")
+                    return None, name_val, full_text_content, gr.update(interactive=False)
+
+                logger.debug(
+                    f"Gradio on_select_prompt: Selected ID={prompt_id}, Name='{name_val}'. Enabling edit button.")
+                return prompt_id, name_val, full_text_content, gr.update(interactive=True)
+            except Exception as e:
+                logger.error(f"Error in on_select_prompt: {e}", exc_info=True)
                 return None, "", "", gr.update(interactive=False)
-
-            selected_row = df_data.iloc[selected_row_index]
-            prompt_id = selected_row["ID"]
-            full_text_content = selected_row.get("Full Text", selected_row[
-                "Text (Preview)"])  # Fallback if "Full Text" somehow missing
-            return prompt_id, selected_row["Name"], full_text_content, gr.update(interactive=True)
 
         with gr.Row():  # Simplified top-level controls for prompts
             create_new_prompt_btn_main = gr.Button("➕ Create New Prompt")
@@ -959,7 +979,7 @@ def _build_queue_management_tab(ui_blocks: gr.Blocks):
         selected_queue_item_full_message_state = gr.State("")
 
         def on_select_queue_item(evt: gr.SelectData, df_data: pd.DataFrame):
-            if evt.index is None or not isinstance(evt.index, tuple) or len(evt.index) == 0:
+            if evt.index is None or not isinstance(evt.index, list) or len(evt.index) == 0:
                 return None, "", "", gr.update(interactive=False), gr.update(interactive=False), gr.Textbox(
                     visible=False), gr.Textbox(visible=False), ""
 

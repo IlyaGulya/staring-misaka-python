@@ -11,3 +11,4 @@ telegram_bot.db
 *.session
 *.secret
 .idea
+.venv
