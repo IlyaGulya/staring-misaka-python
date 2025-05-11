@@ -1,9 +1,6 @@
-# src/staring_misaka/web_ui.py
 import asyncio
-import datetime  # For date inputs
 import logging
-from decimal import Decimal  # For pricing
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import gradio as gr
 import pandas as pd  # For gr.DataFrame
@@ -12,16 +9,14 @@ from fastapi import FastAPI  # Import FastAPI
 from sqlalchemy import func, select, text  # Added func for count
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession  # Import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from .db_models import GlobalBotSettings, LLMModel, Prompt, QueuedLLMCheck  # ModelPricing removed
+from .db_models import GlobalBotSettings, LLMLog, LLMModel, MonitoredGroup, Prompt, QueuedLLMCheck
 from .db_utils import get_db_session
 
 if TYPE_CHECKING:
     from .action_service import ActionService
     from .config import Settings
     from .llm_service import LLMService
-    # from telethon import TelegramClient # If client status is needed directly
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +28,6 @@ _action_service_instance: "ActionService | None" = None  # For discard action po
 
 # Constants
 PROVIDER_CHOICES = ["Anthropic", "OpenAI"]  # Add more as supported
-# CURRENCY_CHOICES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"] # Common currencies - Removed, pricing from YAML
 QUEUE_STATUS_FILTER_CHOICES = ["All", "pending_admin_action", "pending", "failed_reprocessing_attempt", "processing"]
 
 
@@ -155,15 +149,6 @@ async def handle_delete_llm_model(model_id: int):
             logger.warning(f"Gradio: Denied deletion of Model ID {model_id} - it's the global default.")
             return await list_llm_models_data()
 
-        # Pricing is now in YAML, no need to check ModelPricing table before deleting LLMModel
-        # pricing_exists_stmt = select(ModelPricing.id).where(ModelPricing.model_id == model_id).limit(1) # Removed
-        # pricing_exists = await session.scalar(pricing_exists_stmt) # Removed
-        # if pricing_exists: # Removed
-        #     gr.Error( # Removed
-        #         f"Cannot delete Model ID {model_id} as it has associated pricing records. Delete pricing records first.") # Removed
-        #     logger.warning(f"Gradio: Denied deletion of Model ID {model_id} - has associated pricing.") # Removed
-        #     return await list_llm_models_data() # Removed
-
         model = await session.get(LLMModel, model_id)
         if not model:
             gr.Error(f"LLM Model with ID {model_id} not found.")
@@ -215,7 +200,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
         model_id_pending_deletion_state = gr.State(None)
 
         # --- Main View Components (List of models) - Always Visible ---
-        with gr.Column() as list_models_view: # Default visible=True
+        with gr.Column() as list_models_view:  # Default visible=True
             with gr.Row():
                 create_new_model_btn = gr.Button("➕ Create New Model")
                 edit_selected_model_btn = gr.Button("✏️ Edit Selected Model", interactive=False)
@@ -229,7 +214,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
             )
 
         # --- Form View Components (Create/Edit Model) - Toggles Visibility ---
-        with gr.Column(visible=False) as model_form_view: # Initially hidden
+        with gr.Column(visible=False) as model_form_view:  # Initially hidden
             form_title = gr.Markdown("### Create New Model")  # Title will change for edit
             # Hidden field to store actual model_id for updates, not directly user-editable in form
             form_current_editing_id_hidden = gr.Textbox(label="Editing ID", visible=False, interactive=False)
@@ -246,7 +231,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
             set_default_model_from_form_btn = gr.Button("🌟 Set as Global Default", visible=False)
 
         # --- Confirm Deletion View Components - Toggles Visibility ---
-        with gr.Column(visible=False) as confirm_delete_view: # Initially hidden
+        with gr.Column(visible=False) as confirm_delete_view:  # Initially hidden
             gr.Markdown("### Confirm Deletion")
             confirm_delete_text = gr.Markdown("Are you sure you want to delete this model?")
             with gr.Row():
@@ -254,7 +239,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
                 confirm_delete_no_btn = gr.Button("❌ No, Cancel Deletion")
 
         # --- Helper functions for UI state transitions ---
-        def hide_forms_and_confirmations(): # Renamed from show_list_view
+        def hide_forms_and_confirmations():  # Renamed from show_list_view
             return {
                 # list_models_view is always visible
                 model_form_view: gr.update(visible=False),
@@ -310,7 +295,8 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
 
                 selected_row_index = evt.index[0]
                 if not (0 <= selected_row_index < len(df_data)):
-                    logger.error(f"Gradio on_select_model_from_df: Row index {selected_row_index} out of bounds for df_data len {len(df_data)}.")
+                    logger.error(
+                        f"Gradio on_select_model_from_df: Row index {selected_row_index} out of bounds for df_data len {len(df_data)}.")
                     return None, "", "", PROVIDER_CHOICES[0], gr.update(interactive=False)
 
                 selected_row = df_data.iloc[selected_row_index]
@@ -320,7 +306,8 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
                 provider_val = selected_row.get("Provider", PROVIDER_CHOICES[0])
 
                 if model_id is pd.NA or model_id is None:
-                    logger.warning(f"Gradio on_select_model_from_df: Selected model_id is {model_id}. Treating as invalid selection for edit.")
+                    logger.warning(
+                        f"Gradio on_select_model_from_df: Selected model_id is {model_id}. Treating as invalid selection for edit.")
                     return None, name_val, api_id_val, provider_val, gr.update(interactive=False)
 
                 logger.info(
@@ -371,7 +358,8 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
         create_new_model_btn.click(
             show_create_form,
             outputs=[list_models_view, model_form_view, confirm_delete_view, form_title,
-                     form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input, # list_models_view removed from here
+                     form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input,
+                     # list_models_view removed from here
                      form_model_provider_dropdown, delete_model_from_form_btn, set_default_model_from_form_btn,
                      form_model_id_state, form_model_name_state, form_model_api_id_state, form_model_provider_state
                      ]
@@ -386,7 +374,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
         edit_selected_model_btn.click(
             show_edit_form,
             inputs=[selected_model_id_state, form_model_name_state, form_model_api_id_state, form_model_provider_state],
-            outputs=[model_form_view, confirm_delete_view, form_title, # list_models_view removed
+            outputs=[model_form_view, confirm_delete_view, form_title,  # list_models_view removed
                      form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input,
                      form_model_provider_dropdown, delete_model_from_form_btn, set_default_model_from_form_btn,
                      form_model_id_state, form_model_name_state, form_model_api_id_state, form_model_provider_state
@@ -398,31 +386,33 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
             inputs=[form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input,
                     form_model_provider_dropdown],
             outputs=[model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn,
-                     selected_model_id_state] # list_models_view removed
+                     selected_model_id_state]  # list_models_view removed
         )
 
-        cancel_form_btn.click(hide_forms_and_confirmations, # Renamed function
+        cancel_form_btn.click(hide_forms_and_confirmations,  # Renamed function
                               outputs=[model_form_view, confirm_delete_view, edit_selected_model_btn,
-                                       selected_model_id_state]) # list_models_view removed
+                                       selected_model_id_state])  # list_models_view removed
 
         delete_model_from_form_btn.click(
             prepare_for_delete_confirmation,
             inputs=[form_current_editing_id_hidden, form_model_name_input],  # Pass ID and Name for confirm message
-            outputs=[model_form_view, confirm_delete_view, confirm_delete_text, # list_models_view removed
+            outputs=[model_form_view, confirm_delete_view, confirm_delete_text,  # list_models_view removed
                      model_id_pending_deletion_state]
         )
 
         set_default_model_from_form_btn.click(
             set_default_action_from_form,
             inputs=[form_current_editing_id_hidden],  # Pass the ID of the model being edited
-            outputs=[model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn, # list_models_view removed
+            outputs=[model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn,
+                     # list_models_view removed
                      selected_model_id_state]
         )
 
         confirm_delete_yes_btn.click(
             delete_confirmed_action,
             inputs=[model_id_pending_deletion_state],
-            outputs=[model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn, # list_models_view removed
+            outputs=[model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn,
+                     # list_models_view removed
                      selected_model_id_state, model_id_pending_deletion_state]
         )
         confirm_delete_no_btn.click(  # If "No" on delete confirmation, go back to edit form
@@ -602,7 +592,8 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
 
                 selected_row_index = evt.index[0]
                 if not (0 <= selected_row_index < len(df_data)):
-                    logger.error(f"Gradio on_select_prompt: Row index {selected_row_index} out of bounds for df_data len {len(df_data)}.")
+                    logger.error(
+                        f"Gradio on_select_prompt: Row index {selected_row_index} out of bounds for df_data len {len(df_data)}.")
                     return None, "", "", gr.update(interactive=False)
 
                 selected_row = df_data.iloc[selected_row_index]
@@ -611,7 +602,8 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
                 full_text_content = selected_row.get("Full Text", selected_row.get("Text (Preview)", ""))
 
                 if prompt_id is pd.NA or prompt_id is None:
-                    logger.warning(f"Gradio on_select_prompt: Selected prompt_id is {prompt_id}. Treating as invalid selection for edit.")
+                    logger.warning(
+                        f"Gradio on_select_prompt: Selected prompt_id is {prompt_id}. Treating as invalid selection for edit.")
                     return None, name_val, full_text_content, gr.update(interactive=False)
 
                 logger.debug(
@@ -656,7 +648,7 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         prompt_id_pending_deletion_state = gr.State(None)
 
         # --- Prompt UI State Transition Functions ---
-        def hide_prompt_forms_and_confirmations(): # Renamed from show_prompt_list_view
+        def hide_prompt_forms_and_confirmations():  # Renamed from show_prompt_list_view
             return {
                 # Main list and its buttons are always visible
                 prompt_form_view: gr.update(visible=False),
@@ -742,12 +734,14 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         save_prompt_btn.click(
             save_prompt_action_wrapper,
             inputs=[prompt_form_editing_id_hidden, prompt_form_name_input, prompt_form_text_input],
-            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df, edit_selected_prompt_btn_main]
+            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df,
+                     edit_selected_prompt_btn_main]
         )
 
         cancel_prompt_form_btn.click(
             hide_prompt_forms_and_confirmations,
-            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, edit_selected_prompt_btn_main]
+            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state,
+                     edit_selected_prompt_btn_main]
 
         )
 
@@ -767,7 +761,8 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         set_default_prompt_from_form_btn.click(
             set_default_prompt_action_wrapper,
             inputs=[prompt_form_editing_id_hidden],
-            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df, edit_selected_prompt_btn_main]
+            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df,
+                     edit_selected_prompt_btn_main]
         )
 
         async def delete_prompt_confirmed_action_wrapper(prompt_id_to_delete):
@@ -780,7 +775,8 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         confirm_prompt_delete_yes_btn.click(
             delete_prompt_confirmed_action_wrapper,
             inputs=[prompt_id_pending_deletion_state],
-            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df, edit_selected_prompt_btn_main, prompt_id_pending_deletion_state]
+            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df,
+                     edit_selected_prompt_btn_main, prompt_id_pending_deletion_state]
         )
 
         confirm_prompt_delete_no_btn.click(  # Go back to edit form
@@ -789,6 +785,7 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         )
 
     ui_blocks.load(list_prompts_data, outputs=[prompt_data_df])
+
 
 # --- Queue Management ---
 async def list_queued_checks_data(status_filter: str) -> pd.DataFrame:
@@ -989,6 +986,171 @@ def _build_queue_management_tab(ui_blocks: gr.Blocks):
     ui_blocks.load(_refresh_queue_data_async, inputs=[queue_status_filter_dd], outputs=[queue_data_df])
 
 
+# --- LLM Logs Viewer ---
+async def list_llm_logs_data(filter_chat_id: str | None, filter_user_id: str | None,
+                             filter_is_spam: str | None) -> pd.DataFrame:
+    async with get_db_session() as session:
+        stmt = (
+            select(
+                LLMLog.id, LLMLog.timestamp, LLMLog.chat_id, LLMLog.user_id, LLMLog.message_id,
+                LLMModel.name.label("model_name"), Prompt.name.label("prompt_name"),
+                LLMLog.llm_is_spam, LLMLog.llm_reason,
+                LLMLog.input_tokens, LLMLog.output_tokens,
+                LLMLog.calculated_cost, LLMLog.cost_currency,
+                LLMLog.full_prompt_text, LLMLog.raw_request_payload, LLMLog.raw_response_payload
+            )
+            .outerjoin(LLMModel, LLMLog.model_id == LLMModel.id)
+            .outerjoin(Prompt, LLMLog.prompt_id == Prompt.id)
+            .order_by(LLMLog.timestamp.desc())
+            .limit(200)  # Limit results for performance
+        )
+
+        if filter_chat_id:
+            try:
+                stmt = stmt.where(LLMLog.chat_id == int(filter_chat_id))
+            except ValueError:
+                gr.Warning(f"Invalid Chat ID filter: {filter_chat_id}. Must be an integer.")
+        if filter_user_id:
+            try:
+                stmt = stmt.where(LLMLog.user_id == int(filter_user_id))
+            except ValueError:
+                gr.Warning(f"Invalid User ID filter: {filter_user_id}. Must be an integer.")
+        if filter_is_spam is not None and filter_is_spam != "Any":
+            stmt = stmt.where(LLMLog.llm_is_spam == (filter_is_spam == "Yes"))
+
+        result = await session.execute(stmt)
+        logs = []
+        for row in result.mappings().all():
+            logs.append({
+                "ID": row['id'],
+                "Timestamp": row['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if row['timestamp'] else '',
+                "Chat ID": row['chat_id'],
+                "User ID": row['user_id'],
+                "Msg ID": row['message_id'],
+                "Model": row['model_name'] or "N/A",
+                "Prompt": row['prompt_name'] or "N/A",
+                "Spam?": "✅ Yes" if row['llm_is_spam'] else ("❌ No" if row['llm_is_spam'] is False else "N/A"),
+                "Reason (Preview)": (row['llm_reason'][:100] + "..." if row['llm_reason'] and len(
+                    row['llm_reason']) > 100 else row['llm_reason']) or "N/A",
+                "In Tok": row['input_tokens'],
+                "Out Tok": row['output_tokens'],
+                "Cost": f"{row['calculated_cost']:.6f}" if row['calculated_cost'] is not None else "N/A",
+                "Currency": row['cost_currency'] or "",
+                "Full Reason": row['llm_reason'] or "N/A",
+                "Full Prompt Text": row['full_prompt_text'] or "N/A",
+                "Request Payload": row['raw_request_payload'] or "N/A",
+                "Response Payload": row['raw_response_payload'] or "N/A",
+            })
+    df = pd.DataFrame(logs)
+    if "ID" in df.columns and not df.empty:
+        df["ID"] = pd.to_numeric(df["ID"], errors='coerce').astype('Int64')
+    return df
+
+
+def _build_llm_logs_tab(ui_blocks: gr.Blocks):
+    with gr.TabItem("LLM Logs", id="llm_logs_tab"):
+        gr.Markdown("## LLM Interaction Logs")
+        with gr.Row():
+            filter_log_chat_id_input = gr.Textbox(label="Filter by Chat ID (exact match)", placeholder="Optional")
+            filter_log_user_id_input = gr.Textbox(label="Filter by User ID (exact match)", placeholder="Optional")
+            filter_log_is_spam_dd = gr.Dropdown(["Any", "Yes", "No"], value="Any", label="Filter by Is Spam")
+        refresh_logs_btn = gr.Button("🔄 Refresh Logs")
+
+        llm_logs_df = gr.DataFrame(
+            label="LLM Logs (Max 200 shown, newest first)",
+            interactive=False,
+            column_widths=["3%", "12%", "8%", "8%", "6%", "10%", "10%", "5%", "15%", "5%", "5%", "5%", "3%", "0%", "0%",
+                           "0%", "0%"],
+            headers=["ID", "Timestamp", "Chat ID", "User ID", "Msg ID", "Model", "Prompt", "Spam?", "Reason (Preview)",
+                     "In Tok", "Out Tok", "Cost", "Curr", "Full Reason", "Full Prompt Text", "Request Payload",
+                     "Response Payload"],
+            key="llm_logs_df"
+        )
+
+        with gr.Accordion("Selected Log Details", open=False) as log_details_accordion:
+            selected_log_id_display = gr.Textbox(label="Selected Log ID", interactive=False)
+            gr.Label("Full Reason:")
+            selected_log_full_reason_display = gr.Textbox(interactive=False, lines=3, max_lines=10, show_label=False)
+            gr.Label("Full Prompt Text Used:")
+            selected_log_full_prompt_display = gr.Textbox(interactive=False, lines=5, max_lines=15, show_label=False)
+            gr.Label("Raw Request Payload (JSON):")
+            selected_log_request_payload_display = gr.Code(language="json", interactive=False, show_label=False)
+            gr.Label("Raw Response Payload (JSON):")
+            selected_log_response_payload_display = gr.Code(language="json", interactive=False, show_label=False)
+
+        def on_select_log_item(evt: gr.SelectData, df_data: pd.DataFrame):
+            if evt.index is None or not isinstance(evt.index, list) or len(
+                evt.index) == 0: return None, "", "", "", "", gr.Accordion(
+                open=False)
+            selected_row = df_data.iloc[evt.index[0]]
+            return (
+                str(selected_row["ID"]),
+                selected_row.get("Full Reason", ""),
+                selected_row.get("Full Prompt Text", ""),
+                selected_row.get("Request Payload", ""),
+                selected_row.get("Response Payload", ""),
+                gr.Accordion(open=True)
+            )
+
+        refresh_logs_btn.click(
+            list_llm_logs_data,
+            inputs=[filter_log_chat_id_input, filter_log_user_id_input, filter_log_is_spam_dd],
+            outputs=[llm_logs_df]
+        )
+        llm_logs_df.select(
+            on_select_log_item,
+            inputs=[llm_logs_df],
+            outputs=[selected_log_id_display, selected_log_full_reason_display, selected_log_full_prompt_display,
+                     selected_log_request_payload_display, selected_log_response_payload_display,
+                     log_details_accordion]
+        )
+    ui_blocks.load(list_llm_logs_data,
+                   inputs=[filter_log_chat_id_input, filter_log_user_id_input, filter_log_is_spam_dd],
+                   outputs=[llm_logs_df])
+
+
+# --- Monitored Groups Viewer ---
+async def list_monitored_groups_data() -> pd.DataFrame:
+    async with get_db_session() as session:
+        stmt = (
+            select(MonitoredGroup, Prompt.name.label("custom_prompt_name"), LLMModel.name.label("custom_model_name"))
+            .outerjoin(Prompt, MonitoredGroup.custom_prompt_id == Prompt.id)
+            .outerjoin(LLMModel, MonitoredGroup.custom_model_id == LLMModel.id)
+            .order_by(MonitoredGroup.added_at.desc())
+        )
+        result = await session.execute(stmt)
+        groups = []
+        for row_obj, prompt_name, model_name in result.all():  # Iterate over (MonitoredGroup, str|None, str|None)
+            group = row_obj  # MonitoredGroup instance
+            groups.append({
+                "Chat ID": group.chat_id,
+                "Added By User ID": group.added_by_user_id,
+                "Added At": group.added_at.strftime('%Y-%m-%d %H:%M') if group.added_at else '',
+                "Approval Req?": "✅ Yes" if group.require_admin_approval_for_ban else "❌ No",
+                "Pre-ban Msg?": "✅ Yes" if group.pre_ban_message_enabled else "❌ No",
+                "Del Msgs?": "✅ Yes" if group.delete_recent_messages_on_ban else "❌ No",
+                "Del Count": group.num_messages_to_delete_on_ban,
+                "Custom Prompt": prompt_name or "Global Default",
+                "Custom Model": model_name or "Global Default",
+            })
+    return pd.DataFrame(groups)
+
+
+def _build_monitored_groups_tab(ui_blocks: gr.Blocks):
+    with gr.TabItem("Monitored Groups", id="monitored_groups_tab"):
+        gr.Markdown("## Monitored Group Overview")
+        gr.Markdown(
+            "View groups currently monitored by the bot. Configuration is managed via Telegram commands (`/config_group`).")
+        refresh_groups_btn = gr.Button("🔄 Refresh Monitored Groups List")
+        monitored_groups_df = gr.DataFrame(
+            label="Monitored Groups",
+            interactive=False,
+            key="monitored_groups_df"
+        )
+        refresh_groups_btn.click(list_monitored_groups_data, outputs=[monitored_groups_df])
+    ui_blocks.load(list_monitored_groups_data, outputs=[monitored_groups_df])
+
+
 # --- Dashboard ---
 async def get_bot_status() -> str:
     if not _app_settings:
@@ -1027,45 +1189,15 @@ def create_main_ui_layout():
             with gr.TabItem("Dashboard", id="dashboard_tab"):
                 gr.Markdown("## Dashboard")
                 status_output = gr.Textbox(label="Bot Status", interactive=False, lines=5,
-                                           # Increased lines for pricing status
                                            elem_id="dashboard_status_output")
                 refresh_status_btn = gr.Button("Refresh Status")
                 refresh_status_btn.click(get_bot_status, outputs=status_output)
 
             _build_llm_models_tab(ui)
             _build_prompts_tab(ui)
-            # _build_model_pricing_tab(ui) # Removed
             _build_queue_management_tab(ui)
-
-            with gr.TabItem("Monitored Groups", id="groups_tab"):  # Kept as placeholder
-                gr.Markdown("## Monitored Group Management")
-                gr.Markdown("_(Functionality to be implemented)_")
-
-            with gr.TabItem("LLM Logs", id="logs_tab"):  # Kept as placeholder
-                gr.Markdown("## LLM Logs Viewer")
-                gr.Markdown("_(Functionality to be implemented)_")
-
-            with gr.TabItem("Pricing Configuration (Read-Only)", id="pricing_view_tab"):
-                gr.Markdown("## View Pricing Configuration")
-                gr.Markdown(
-                    "Model pricing is managed via the `pricing_config.yaml` file. Restart the bot to apply changes from the YAML.")
-                pricing_yaml_display = gr.Code(label="Current pricing_config.yaml content (if loaded)", language="yaml",
-                                               interactive=False)
-
-                async def load_pricing_yaml_content():
-                    if _app_settings and _app_settings.pricing_config_file_path:
-                        try:
-                            with open(_app_settings.pricing_config_file_path, 'r') as f:
-                                return f.read()
-                        except FileNotFoundError:
-                            return f"File not found: {_app_settings.pricing_config_file_path}"
-                        except Exception as e:
-                            return f"Error reading file: {e}"
-                    return "Pricing config path not set or file unreadable."
-
-                ui.load(load_pricing_yaml_content, outputs=[pricing_yaml_display])  # Load on tab/UI load
-                refresh_pricing_view_btn = gr.Button("🔄 Refresh View from YAML File")
-                refresh_pricing_view_btn.click(load_pricing_yaml_content, outputs=[pricing_yaml_display])
+            _build_monitored_groups_tab(ui)
+            _build_llm_logs_tab(ui)
 
         ui.load(get_bot_status, outputs=status_output)  # Initial load for dashboard status
     return ui

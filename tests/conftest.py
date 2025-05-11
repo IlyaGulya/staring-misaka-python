@@ -25,7 +25,6 @@ from staring_misaka.db_models import (  # FIX: Add LLMModel and Prompt
     Base,
     GlobalBotSettings,
     LLMModel,
-    # ModelPricing, # Removed as pricing is now from YAML
     MonitoredGroup,
     NewUser,
     Prompt,
@@ -476,10 +475,6 @@ async def setup_queue_test(db_session, monitored_group, new_user_in_group):
     model = test_model_obj
     test_logger.debug(
         f"Using/Set model for test: ID={model.id}, Name={model.name}, GS default_model_id now {gs.default_model_id}")
-    
-    # ModelPricing is no longer created in the DB here.
-    # Pricing will be read from the test_settings.loaded_pricing_config (if populated by a test pricing.yaml)
-
     await db_session.flush()
     test_logger.debug(f"Setup complete. Yielding prompt (ID={prompt.id}) and model (ID={model.id})")
     yield prompt, model

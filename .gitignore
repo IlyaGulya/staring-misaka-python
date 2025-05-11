@@ -12,3 +12,4 @@ telegram_bot.db
 *.secret
 .idea
 .venv
+staring_misaka.data

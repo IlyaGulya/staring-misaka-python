@@ -1,4 +1,5 @@
 # tests/integration/test_web_ui_handlers.py
+from _pydecimal import Decimal
 from unittest.mock import AsyncMock
 
 import pandas as pd
@@ -6,10 +7,10 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from staring_misaka.config import Settings # Required for setup_web_ui_globals
-import staring_misaka.web_ui as web_ui_module # For setting _app_settings in dashboard tests
+from staring_misaka.config import Settings  # Required for setup_web_ui_globals
+import staring_misaka.web_ui as web_ui_module  # For setting _app_settings in dashboard tests
 
-from staring_misaka.db_models import GlobalBotSettings, LLMModel, NewUser, Prompt, QueuedLLMCheck
+from staring_misaka.db_models import GlobalBotSettings, LLMLog, LLMModel, NewUser, Prompt, QueuedLLMCheck
 from staring_misaka.web_ui import (
     # Dashboard
     get_bot_status,
@@ -29,6 +30,9 @@ from staring_misaka.web_ui import (
     list_queued_checks_data,
     handle_discard_queued_item,
     handle_reprocess_queued_item,
+    # LLM Logs
+    list_llm_logs_data,
+    list_monitored_groups_data,
 )
 from tests.conftest import TEST_CHAT_ID, TEST_NEW_USER_ID
 
@@ -69,7 +73,7 @@ def get_record_from_df(df: pd.DataFrame, column: str, value: any) -> pd.Series |
 @pytest.mark.usefixtures("setup_web_ui_globals")
 class TestWebUIDashboardHandlers:
     async def test_get_bot_status_db_ok_no_queue(self, db_session: AsyncSession, mocker, test_settings: Settings):
-        web_ui_module._app_settings = test_settings # Ensure _app_settings is set for get_bot_status
+        web_ui_module._app_settings = test_settings  # Ensure _app_settings is set for get_bot_status
         status_str = await get_bot_status()
         assert "DB Connected" in status_str
         assert "Items needing admin action in queue: 0" in status_str
@@ -78,7 +82,8 @@ class TestWebUIDashboardHandlers:
         else:
             assert f"Pricing Config: Not loaded or empty (Path: {test_settings.pricing_config_file_path})" in status_str
 
-    async def test_get_bot_status_db_ok_with_queue_items(self, db_session: AsyncSession, mocker, test_settings: Settings):
+    async def test_get_bot_status_db_ok_with_queue_items(self, db_session: AsyncSession, mocker,
+                                                         test_settings: Settings):
         from staring_misaka.dto import MessageContext
         gs = await db_session.get(GlobalBotSettings, 1)
         assert gs and gs.default_model_id and gs.default_prompt_id
@@ -88,7 +93,7 @@ class TestWebUIDashboardHandlers:
             original_model_id_attempted=gs.default_model_id, original_prompt_id_attempted=gs.default_prompt_id,
             status="pending_admin_action"
         )
-        db_session.add(item1) # Corrected from add_all
+        db_session.add(item1)  # Corrected from add_all
         await db_session.flush()
         web_ui_module._app_settings = test_settings
         status_str = await get_bot_status()
@@ -109,7 +114,7 @@ class TestWebUIDashboardHandlers:
         web_ui_module._app_settings = test_settings
         status_str = await get_bot_status()
         assert "DB Connection Error: ConnectionRefusedError" in status_str
-        assert "Items needing admin action in queue:" in status_str # Count might be 0 or more depending on mock
+        assert "Items needing admin action in queue:" in status_str  # Count might be 0 or more depending on mock
         if test_settings.loaded_pricing_config and test_settings.loaded_pricing_config.models:
             assert "Pricing Config: Loaded" in status_str
         else:
@@ -162,8 +167,9 @@ class TestWebUILLMModelHandlers:
         updated_api_id = "updated-api-v2"
         updated_provider = "OpenAI"
         # The handler returns the updated DataFrame
-        df_after_update = await handle_update_llm_model(model_id_to_update, updated_name, updated_api_id, updated_provider)
-        assert_df_contains_record(df_after_update, "Name", updated_name) # Check the returned DF
+        df_after_update = await handle_update_llm_model(model_id_to_update, updated_name, updated_api_id,
+                                                        updated_provider)
+        assert_df_contains_record(df_after_update, "Name", updated_name)  # Check the returned DF
         db_session.expire_all()
         updated_model_db = await db_session.get(LLMModel, model_id_to_update)
         assert updated_model_db is not None
@@ -179,7 +185,7 @@ class TestWebUILLMModelHandlers:
         model_id_to_delete = model_db_initial.id
         # The handler returns the DataFrame after deletion
         df_after_delete = await handle_delete_llm_model(model_id_to_delete)
-        assert get_record_from_df(df_after_delete, "ID", model_id_to_delete) is None # Check DF
+        assert get_record_from_df(df_after_delete, "ID", model_id_to_delete) is None  # Check DF
         db_session.expire_all()
         deleted_model_db = await db_session.get(LLMModel, int(model_id_to_delete))
         assert deleted_model_db is None
@@ -193,8 +199,8 @@ class TestWebUILLMModelHandlers:
         # The handler returns the DataFrame with the new default marked
         df_after_set_default = await handle_set_global_default_model(new_default_model_id)
         default_record = get_record_from_df(df_after_set_default, "ID", new_default_model_id)
-        assert default_record is not None # Check the record exists
-        assert default_record["Default"] == "✅" # Check the default marker in DF
+        assert default_record is not None  # Check the record exists
+        assert default_record["Default"] == "✅"  # Check the default marker in DF
         db_session.expire_all()
         gs = await db_session.get(GlobalBotSettings, 1)
         assert gs is not None
@@ -265,9 +271,6 @@ class TestWebUIPromptHandlers:
         assert updated_prompt_db.is_global_default is True
 
 
-# Model Pricing tests are removed as this functionality is now YAML-based and UI is removed.
-
-
 @pytest.mark.usefixtures("setup_web_ui_globals", "monitored_group", "new_user_in_group", "setup_queue_test")
 class TestWebUIQueueManagementHandlers:
 
@@ -304,48 +307,49 @@ class TestWebUIQueueManagementHandlers:
         await self._create_test_queued_item(db_session, "Test reason for admin action", "pending_admin_action")
 
         df_all = await list_queued_checks_data("All")
-        assert len(df_all) >= 2 
+        assert len(df_all) >= 2
 
         df_pending_admin = await list_queued_checks_data("pending_admin_action")
-        assert len(df_pending_admin) >= 1 
+        assert len(df_pending_admin) >= 1
         assert all(df_pending_admin["Status"] == "pending_admin_action")
         assert_df_contains_record(df_pending_admin, "Reason (Preview)", "Test reason for admin action"[:150])
 
         df_pending = await list_queued_checks_data("pending")
-        assert len(df_pending) >= 1 
+        assert len(df_pending) >= 1
         assert all(df_pending["Status"] == "pending")
 
     async def test_discard_queued_item(self, db_session: AsyncSession, test_settings: Settings):
-        item_user_id = TEST_NEW_USER_ID + 55 
-        db_session.add(NewUser(user_id=item_user_id, chat_id=TEST_CHAT_ID)) 
+        item_user_id = TEST_NEW_USER_ID + 55
+        db_session.add(NewUser(user_id=item_user_id, chat_id=TEST_CHAT_ID))
         await db_session.flush()
 
-        item = await self._create_test_queued_item(db_session, "Item to discard via UI", "pending_admin_action", user_id_override=item_user_id)
+        item = await self._create_test_queued_item(db_session, "Item to discard via UI", "pending_admin_action",
+                                                   user_id_override=item_user_id)
         item_id_to_discard = item.id
 
-        df_after_discard = await handle_discard_queued_item(item_id_to_discard, "pending_admin_action") 
+        df_after_discard = await handle_discard_queued_item(item_id_to_discard, "pending_admin_action")
 
         record = get_record_from_df(df_after_discard, "ID", item_id_to_discard)
         assert record is None
 
-        db_session.expire_all() 
+        db_session.expire_all()
         discarded_item_db = await db_session.get(QueuedLLMCheck, item_id_to_discard)
         assert discarded_item_db is None
         assert await db_session.get(NewUser, {"user_id": item_user_id, "chat_id": TEST_CHAT_ID}) is None
-
 
     async def test_reprocess_queued_item_success_not_spam(self, db_session: AsyncSession, mocker,
                                                           test_settings: Settings):
         import staring_misaka.web_ui as web_ui_module_local  # Local import to avoid conflict
         from staring_misaka.dto import LLMSpamAnalysisResult  # Local import
 
-        item_user_id = TEST_NEW_USER_ID + 66 
-        db_session.add(NewUser(user_id=item_user_id, chat_id=TEST_CHAT_ID)) 
+        item_user_id = TEST_NEW_USER_ID + 66
+        db_session.add(NewUser(user_id=item_user_id, chat_id=TEST_CHAT_ID))
         await db_session.flush()
-        item = await self._create_test_queued_item(db_session, "Reprocess - not spam", "pending", user_id_override=item_user_id)
+        item = await self._create_test_queued_item(db_session, "Reprocess - not spam", "pending",
+                                                   user_id_override=item_user_id)
         item_id_to_reprocess = item.id
 
-        llm_service_to_mock = web_ui_module_local._llm_service_instance # Use aliased import
+        llm_service_to_mock = web_ui_module_local._llm_service_instance  # Use aliased import
         assert llm_service_to_mock is not None
 
         mock_analyze_result = LLMSpamAnalysisResult(
@@ -354,28 +358,29 @@ class TestWebUIQueueManagementHandlers:
         )
         mocker.patch.object(llm_service_to_mock, 'analyze_message_for_spam', return_value=mock_analyze_result)
 
-        df_after_reprocess = await handle_reprocess_queued_item(item_id_to_reprocess, "pending") 
+        df_after_reprocess = await handle_reprocess_queued_item(item_id_to_reprocess, "pending")
 
         record_in_df = get_record_from_df(df_after_reprocess, "ID", item_id_to_reprocess)
-        assert record_in_df is None 
+        assert record_in_df is None
 
-        db_session.expire_all() 
+        db_session.expire_all()
         reprocessed_item_db = await db_session.get(QueuedLLMCheck, item_id_to_reprocess)
-        assert reprocessed_item_db is None 
+        assert reprocessed_item_db is None
         assert await db_session.get(NewUser, {"user_id": item_user_id, "chat_id": TEST_CHAT_ID}) is None
 
     async def test_reprocess_queued_item_success_is_spam(self, db_session: AsyncSession, mocker,
-                                                          test_settings: Settings):
+                                                         test_settings: Settings):
         import staring_misaka.web_ui as web_ui_module_local  # Local import
         from staring_misaka.dto import LLMSpamAnalysisResult  # Local import
 
         item_user_id = TEST_NEW_USER_ID + 77
-        db_session.add(NewUser(user_id=item_user_id, chat_id=TEST_CHAT_ID)) 
+        db_session.add(NewUser(user_id=item_user_id, chat_id=TEST_CHAT_ID))
         await db_session.flush()
-        item = await self._create_test_queued_item(db_session, "Reprocess - is spam", "pending", user_id_override=item_user_id)
+        item = await self._create_test_queued_item(db_session, "Reprocess - is spam", "pending",
+                                                   user_id_override=item_user_id)
         item_id_to_reprocess = item.id
 
-        llm_service_to_mock = web_ui_module_local._llm_service_instance # Use aliased import
+        llm_service_to_mock = web_ui_module_local._llm_service_instance  # Use aliased import
         assert llm_service_to_mock is not None
 
         mock_analyze_result = LLMSpamAnalysisResult(
@@ -383,32 +388,33 @@ class TestWebUIQueueManagementHandlers:
             model_name_used="mock-reprocess-model", status="success"
         )
         mocker.patch.object(llm_service_to_mock, 'analyze_message_for_spam', return_value=mock_analyze_result)
-        mock_request_approval = mocker.patch.object(web_ui_module_local._action_service_instance, 'request_admin_approval_for_ban', new_callable=AsyncMock) # Use aliased
+        mock_request_approval = mocker.patch.object(web_ui_module_local._action_service_instance,
+                                                    'request_admin_approval_for_ban',
+                                                    new_callable=AsyncMock)  # Use aliased
 
-
-        df_after_reprocess = await handle_reprocess_queued_item(item_id_to_reprocess, "pending") 
+        df_after_reprocess = await handle_reprocess_queued_item(item_id_to_reprocess, "pending")
 
         record_in_df = get_record_from_df(df_after_reprocess, "ID", item_id_to_reprocess)
-        assert record_in_df is None 
+        assert record_in_df is None
 
-        db_session.expire_all() 
+        db_session.expire_all()
         reprocessed_item_db = await db_session.get(QueuedLLMCheck, item_id_to_reprocess)
-        assert reprocessed_item_db is None 
-        mock_request_approval.assert_called_once() 
+        assert reprocessed_item_db is None
+        mock_request_approval.assert_called_once()
         assert await db_session.get(NewUser, {"user_id": item_user_id, "chat_id": TEST_CHAT_ID}) is not None
 
-
     async def test_reprocess_queued_item_fails_llm(self, db_session: AsyncSession, mocker,
-                                                          test_settings: Settings):
+                                                   test_settings: Settings):
         import staring_misaka.web_ui as web_ui_module_local  # Local import
         from staring_misaka.dto import LLMSpamAnalysisResult  # Local import
 
         item = await self._create_test_queued_item(db_session, "Reprocess - will fail LLM", "pending")
         item_id_to_reprocess = item.id
 
-        llm_service_to_mock = web_ui_module_local._llm_service_instance # Use aliased import
+        llm_service_to_mock = web_ui_module_local._llm_service_instance  # Use aliased import
         assert llm_service_to_mock is not None
-        mock_analyze_fail_result = LLMSpamAnalysisResult(status="critical_error_no_check", error_message="LLM Reprocess API Failed")
+        mock_analyze_fail_result = LLMSpamAnalysisResult(status="critical_error_no_check",
+                                                         error_message="LLM Reprocess API Failed")
         mocker.patch.object(llm_service_to_mock, 'analyze_message_for_spam', return_value=mock_analyze_fail_result)
 
         df_after_reprocess_pending_filter = await handle_reprocess_queued_item(item_id_to_reprocess, "pending")
@@ -421,8 +427,84 @@ class TestWebUIQueueManagementHandlers:
             f"Item {item_id_to_reprocess} not found in DataFrame when filtering by 'failed_reprocessing_attempt'"
         assert reprocessed_item_df_record["Status"] == "failed_reprocessing_attempt"
 
-        db_session.expire_all() 
+        db_session.expire_all()
         reprocessed_item_db = await db_session.get(QueuedLLMCheck, item_id_to_reprocess)
         assert reprocessed_item_db is not None
         assert reprocessed_item_db.status == "failed_reprocessing_attempt"
         assert "Reprocess critical error: LLM Reprocess API Failed" in reprocessed_item_db.reason_for_queueing
+
+
+@pytest.mark.usefixtures("setup_web_ui_globals", "setup_queue_test")  # setup_queue_test for default model/prompt
+class TestWebUILLMLogsHandlers:
+    async def _create_test_llm_log(self, db_session: AsyncSession, chat_id: int | None, user_id: int | None,
+                                   is_spam: bool, reason: str | None) -> LLMLog:
+        from staring_misaka.db_models import LLMLog  # Local import
+        gs = await db_session.get(GlobalBotSettings, 1)
+        assert gs and gs.default_model_id and gs.default_prompt_id
+
+        log_entry = LLMLog(
+            chat_id=chat_id, user_id=user_id, message_id=1000 + (user_id or 0),
+            model_id=gs.default_model_id, prompt_id=gs.default_prompt_id,
+            full_prompt_text="Test full prompt text {message_text}",
+            llm_is_spam=is_spam, llm_reason=reason,
+            input_tokens=10, output_tokens=5, calculated_cost=Decimal("0.000123")
+        )
+        db_session.add(log_entry)
+        await db_session.flush()
+        return log_entry
+
+    async def test_list_llm_logs_empty(self, db_session: AsyncSession):
+        await db_session.execute(delete(LLMLog))  # Clear any existing logs
+        await db_session.flush()
+        df = await list_llm_logs_data(None, None, "Any")
+        assert df.empty
+
+    async def test_list_llm_logs_with_data_and_filters(self, db_session: AsyncSession):
+        await db_session.execute(delete(LLMLog))  # Clear logs
+        log1 = await self._create_test_llm_log(db_session, TEST_CHAT_ID, TEST_NEW_USER_ID, True, "Spam log 1")
+        log2 = await self._create_test_llm_log(db_session, TEST_CHAT_ID, TEST_NEW_USER_ID + 1, False, "Not spam log 2")
+        log3 = await self._create_test_llm_log(db_session, TEST_CHAT_ID + 1, TEST_NEW_USER_ID, True,
+                                               "Spam log 3 in other chat")
+
+        # Test list all
+        df_all = await list_llm_logs_data(None, None, "Any")
+        assert len(df_all) == 3
+        assert_df_contains_record(df_all, "ID", log1.id)
+        assert_df_contains_record(df_all, "ID", log2.id)
+        assert_df_contains_record(df_all, "ID", log3.id)
+
+        # Test filter by chat_id
+        df_chat1 = await list_llm_logs_data(str(TEST_CHAT_ID), None, "Any")
+        assert len(df_chat1) == 2
+        assert_df_contains_record(df_chat1, "ID", log1.id)
+        assert_df_contains_record(df_chat1, "ID", log2.id)
+
+        # Test filter by user_id
+        df_user1 = await list_llm_logs_data(None, str(TEST_NEW_USER_ID), "Any")
+        assert len(df_user1) == 2
+        assert_df_contains_record(df_user1, "ID", log1.id)
+        assert_df_contains_record(df_user1, "ID", log3.id)
+
+        # Test filter by is_spam = Yes
+        df_spam_yes = await list_llm_logs_data(None, None, "Yes")
+        assert len(df_spam_yes) == 2
+        assert all(df_spam_yes["Spam?"] == "✅ Yes")
+
+        # Test filter by is_spam = No
+        df_spam_no = await list_llm_logs_data(None, None, "No")
+        assert len(df_spam_no) == 1
+        assert_df_contains_record(df_spam_no, "ID", log2.id)
+        assert all(df_spam_no["Spam?"] == "❌ No")
+
+
+@pytest.mark.usefixtures("setup_web_ui_globals", "monitored_group", "setup_queue_test")
+class TestWebUIMonitoredGroupsHandlers:
+    async def test_list_monitored_groups_with_data(self, db_session: AsyncSession, monitored_group):
+        # monitored_group fixture ensures at least one group exists
+        df = await list_monitored_groups_data()
+        assert not df.empty
+        assert_df_contains_record(df, "Chat ID", TEST_CHAT_ID)
+        record = get_record_from_df(df, "Chat ID", TEST_CHAT_ID)
+        assert record is not None
+        assert record["Approval Req?"] == "❌ No"  # Default from monitored_group fixture
+        assert record["Custom Prompt"] == "Global Default"  # Assuming no custom prompt set by default

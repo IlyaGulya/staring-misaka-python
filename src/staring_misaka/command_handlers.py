@@ -352,4 +352,4 @@ If you need further assistance, please contact the bot operator."""
         self.client.add_event_handler(self.admin_reply_handler, events.NewMessage(incoming=True, func=lambda
             e: e.is_private and e.reply_to_msg_id is not None))
         self.client.add_event_handler(self.config_group_handler, events.NewMessage(pattern=r"/config_group"))
-        logger.info("Command handlers registered (some moved to Web UI).")
+        logger.info("Command handlers registered.")
