@@ -47,25 +47,6 @@ async def _get_global_settings(session: AsyncSession) -> GlobalBotSettings | Non
     return gs
 
 
-# def df_to_list_of_dicts(df: pd.DataFrame | None) -> list[dict[str, Any]]:  # Unused, kept for now - Original Comment
-#     if df is None or df.empty:
-#         return []
-#     return df.to_dict(orient='records')
-
-
-async def get_llm_model_choices() -> list[tuple[str, int]]:
-    """Returns a list of (model_name, model_id) for dropdowns."""
-    async with get_db_session() as session:
-        stmt = select(LLMModel.id, LLMModel.name).order_by(LLMModel.name)
-        result = await session.execute(stmt)
-        return [(f"{row.name} (ID: {row.id})", row.id) for row in result.mappings().all()]
-
-
-async def _llm_model_choices_loader():  # Helper for ui.load
-    choices = await get_llm_model_choices()
-    return gr.update(choices=choices)
-
-
 # --- Async Wrappers for Queue Handlers ---
 async def _refresh_queue_data_async(status_filter: str):
     return await list_queued_checks_data(status_filter)
@@ -77,12 +58,6 @@ async def _handle_reprocess_queued_item_async(item_id: int, status_filter: str):
 
 async def _handle_discard_queued_item_async(item_id: int, status_filter: str):
     return await handle_discard_queued_item(item_id, status_filter)
-
-
-# --- UI State Enums ---
-class FormMode:  # New class for managing form states if needed, or can use simple string states
-    CREATE = "create"
-    EDIT = "edit"
 
 
 # --- LLM Model Management ---
@@ -239,8 +214,8 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
         form_model_provider_state = gr.State(PROVIDER_CHOICES[0])
         model_id_pending_deletion_state = gr.State(None)
 
-        # --- Main View Components (List of models) ---
-        with gr.Column(visible=True) as list_models_view:
+        # --- Main View Components (List of models) - Always Visible ---
+        with gr.Column() as list_models_view: # Default visible=True
             with gr.Row():
                 create_new_model_btn = gr.Button("➕ Create New Model")
                 edit_selected_model_btn = gr.Button("✏️ Edit Selected Model", interactive=False)
@@ -253,8 +228,8 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
                 key="llm_models_df"
             )
 
-        # --- Form View Components (Create/Edit Model) ---
-        with gr.Column(visible=False) as model_form_view:
+        # --- Form View Components (Create/Edit Model) - Toggles Visibility ---
+        with gr.Column(visible=False) as model_form_view: # Initially hidden
             form_title = gr.Markdown("### Create New Model")  # Title will change for edit
             # Hidden field to store actual model_id for updates, not directly user-editable in form
             form_current_editing_id_hidden = gr.Textbox(label="Editing ID", visible=False, interactive=False)
@@ -270,8 +245,8 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
             delete_model_from_form_btn = gr.Button("🗑️ Delete This Model", variant="stop", visible=False)
             set_default_model_from_form_btn = gr.Button("🌟 Set as Global Default", visible=False)
 
-        # --- Confirm Deletion View Components ---
-        with gr.Column(visible=False) as confirm_delete_view:
+        # --- Confirm Deletion View Components - Toggles Visibility ---
+        with gr.Column(visible=False) as confirm_delete_view: # Initially hidden
             gr.Markdown("### Confirm Deletion")
             confirm_delete_text = gr.Markdown("Are you sure you want to delete this model?")
             with gr.Row():
@@ -279,9 +254,9 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
                 confirm_delete_no_btn = gr.Button("❌ No, Cancel Deletion")
 
         # --- Helper functions for UI state transitions ---
-        def show_list_view():
+        def hide_forms_and_confirmations(): # Renamed from show_list_view
             return {
-                list_models_view: gr.update(visible=True),
+                # list_models_view is always visible
                 model_form_view: gr.update(visible=False),
                 confirm_delete_view: gr.update(visible=False),
                 edit_selected_model_btn: gr.update(interactive=False),  # Reset edit button
@@ -291,7 +266,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
         def show_create_form():
             # Clear form states for a new entry
             return {
-                list_models_view: gr.update(visible=False),
+                # list_models_view remains visible
                 model_form_view: gr.update(visible=True),
                 confirm_delete_view: gr.update(visible=False),
                 form_title: gr.update(value="### Create New Model"),
@@ -309,7 +284,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
 
         def show_edit_form(model_id, name, api_id, provider):
             return {
-                list_models_view: gr.update(visible=False),
+                # list_models_view remains visible
                 model_form_view: gr.update(visible=True),
                 confirm_delete_view: gr.update(visible=False),
                 form_title: gr.update(value=f"### Edit Model (ID: {model_id})"),
@@ -361,16 +336,16 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
             else:  # Create mode
                 df_result = await handle_create_llm_model(name, api_id, provider)
 
-            updates_for_list_view = show_list_view()
-            updates_for_list_view[model_data_df] = df_result  # Add DataFrame update
-            return updates_for_list_view
+            updates_to_hide_forms = hide_forms_and_confirmations()
+            updates_to_hide_forms[model_data_df] = df_result
+            return updates_to_hide_forms
 
         async def delete_confirmed_action(model_id_to_delete):
             df_result = await handle_delete_llm_model(model_id_to_delete)
-            updates_for_list_view = show_list_view()
-            updates_for_list_view[model_data_df] = df_result
-            updates_for_list_view[model_id_pending_deletion_state] = None  # Clear pending deletion
-            return updates_for_list_view
+            updates_to_hide_forms = hide_forms_and_confirmations()
+            updates_to_hide_forms[model_data_df] = df_result
+            updates_to_hide_forms[model_id_pending_deletion_state] = None
+            return updates_to_hide_forms
 
         def prepare_for_delete_confirmation(model_id, model_name):
             return {
@@ -385,10 +360,10 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
         async def set_default_action_from_form(model_id):
             # This function is called when "Set as Global Default" is clicked IN THE FORM
             # It should set the default, refresh the main list, and return to the list view.
-            df_result = await handle_set_global_default_model(model_id)
-            updates_for_list_view = show_list_view()
-            updates_for_list_view[model_data_df] = df_result
-            return updates_for_list_view
+            df_result_after_default_set = await handle_set_global_default_model(model_id)
+            updates_to_hide_forms = hide_forms_and_confirmations()
+            updates_to_hide_forms[model_data_df] = df_result_after_default_set
+            return updates_to_hide_forms
 
         # --- Wire up event handlers ---
         refresh_models_btn.click(list_llm_models_data, outputs=[model_data_df])
@@ -396,7 +371,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
         create_new_model_btn.click(
             show_create_form,
             outputs=[list_models_view, model_form_view, confirm_delete_view, form_title,
-                     form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input,
+                     form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input, # list_models_view removed from here
                      form_model_provider_dropdown, delete_model_from_form_btn, set_default_model_from_form_btn,
                      form_model_id_state, form_model_name_state, form_model_api_id_state, form_model_provider_state
                      ]
@@ -411,7 +386,7 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
         edit_selected_model_btn.click(
             show_edit_form,
             inputs=[selected_model_id_state, form_model_name_state, form_model_api_id_state, form_model_provider_state],
-            outputs=[list_models_view, model_form_view, confirm_delete_view, form_title,
+            outputs=[model_form_view, confirm_delete_view, form_title, # list_models_view removed
                      form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input,
                      form_model_provider_dropdown, delete_model_from_form_btn, set_default_model_from_form_btn,
                      form_model_id_state, form_model_name_state, form_model_api_id_state, form_model_provider_state
@@ -422,39 +397,39 @@ def _build_llm_models_tab(ui_blocks: gr.Blocks):
             save_model_action,
             inputs=[form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input,
                     form_model_provider_dropdown],
-            outputs=[list_models_view, model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn,
-                     selected_model_id_state]  # model_data_df added
+            outputs=[model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn,
+                     selected_model_id_state] # list_models_view removed
         )
 
-        cancel_form_btn.click(show_list_view,
-                              outputs=[list_models_view, model_form_view, confirm_delete_view, edit_selected_model_btn,
-                                       selected_model_id_state])
+        cancel_form_btn.click(hide_forms_and_confirmations, # Renamed function
+                              outputs=[model_form_view, confirm_delete_view, edit_selected_model_btn,
+                                       selected_model_id_state]) # list_models_view removed
 
         delete_model_from_form_btn.click(
             prepare_for_delete_confirmation,
             inputs=[form_current_editing_id_hidden, form_model_name_input],  # Pass ID and Name for confirm message
-            outputs=[list_models_view, model_form_view, confirm_delete_view, confirm_delete_text,
+            outputs=[model_form_view, confirm_delete_view, confirm_delete_text, # list_models_view removed
                      model_id_pending_deletion_state]
         )
 
         set_default_model_from_form_btn.click(
             set_default_action_from_form,
             inputs=[form_current_editing_id_hidden],  # Pass the ID of the model being edited
-            outputs=[list_models_view, model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn,
+            outputs=[model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn, # list_models_view removed
                      selected_model_id_state]
         )
 
         confirm_delete_yes_btn.click(
             delete_confirmed_action,
             inputs=[model_id_pending_deletion_state],
-            outputs=[list_models_view, model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn,
+            outputs=[model_form_view, confirm_delete_view, model_data_df, edit_selected_model_btn, # list_models_view removed
                      selected_model_id_state, model_id_pending_deletion_state]
         )
         confirm_delete_no_btn.click(  # If "No" on delete confirmation, go back to edit form
             show_edit_form,
             inputs=[form_model_id_state, form_model_name_state, form_model_api_id_state, form_model_provider_state],
             # Use states that were set when edit form was shown
-            outputs=[list_models_view, model_form_view, confirm_delete_view, form_title,
+            outputs=[model_form_view, confirm_delete_view, form_title,
                      form_current_editing_id_hidden, form_model_name_input, form_model_api_id_input,
                      form_model_provider_dropdown, delete_model_from_form_btn, set_default_model_from_form_btn,
                      form_model_id_state, form_model_name_state, form_model_api_id_state, form_model_provider_state
@@ -605,6 +580,7 @@ async def handle_set_global_default_prompt(prompt_id: int):
 def _build_prompts_tab(ui_blocks: gr.Blocks):
     with gr.TabItem("Prompts"):
         gr.Markdown("## Prompt Management")
+        # --- Main View Components (List of prompts & action buttons) - Always Visible ---
 
         prompt_data_df = gr.DataFrame(
             value=pd.DataFrame(columns=["ID", "Name", "Text (Preview)", "Full Text", "Default", "Created At"]),
@@ -645,13 +621,13 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
                 logger.error(f"Error in on_select_prompt: {e}", exc_info=True)
                 return None, "", "", gr.update(interactive=False)
 
-        with gr.Row():  # Simplified top-level controls for prompts
+        with gr.Row():
             create_new_prompt_btn_main = gr.Button("➕ Create New Prompt")
             edit_selected_prompt_btn_main = gr.Button("✏️ Edit Selected Prompt", interactive=False)
             refresh_prompts_btn = gr.Button("🔄 Refresh Prompts")
 
-        # --- Prompt Form (for Create/Edit) ---
-        with gr.Column(visible=False) as prompt_form_view:  # Hidden by default
+        # --- Prompt Form (for Create/Edit) - Toggles Visibility ---
+        with gr.Column(visible=False) as prompt_form_view:
             prompt_form_title = gr.Markdown("### Create New Prompt")
             prompt_form_editing_id_hidden = gr.Textbox(label="Editing Prompt ID", visible=False, interactive=False)
 
@@ -665,7 +641,7 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
             delete_prompt_from_form_btn = gr.Button("🗑️ Delete This Prompt", variant="stop", visible=False)
             set_default_prompt_from_form_btn = gr.Button("🌟 Set as Global Default", visible=False)
 
-        # --- Prompt Delete Confirmation ---
+        # --- Prompt Delete Confirmation - Toggles Visibility ---
         with gr.Column(visible=False) as confirm_prompt_delete_view:
             gr.Markdown("### Confirm Prompt Deletion")
             confirm_prompt_delete_text = gr.Markdown("Are you sure?")
@@ -680,12 +656,9 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         prompt_id_pending_deletion_state = gr.State(None)
 
         # --- Prompt UI State Transition Functions ---
-        def show_prompt_list_view():
+        def hide_prompt_forms_and_confirmations(): # Renamed from show_prompt_list_view
             return {
-                prompt_data_df.parent: gr.update(visible=True),  # Show the column containing the dataframe
-                create_new_prompt_btn_main: gr.update(visible=True),
-                edit_selected_prompt_btn_main: gr.update(visible=True, interactive=False),
-                refresh_prompts_btn: gr.update(visible=True),
+                # Main list and its buttons are always visible
                 prompt_form_view: gr.update(visible=False),
                 confirm_prompt_delete_view: gr.update(visible=False),
                 selected_prompt_id_state: None
@@ -693,11 +666,8 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
 
         def show_create_prompt_form():
             return {
-                prompt_data_df.parent: gr.update(visible=False),
-                create_new_prompt_btn_main: gr.update(visible=False),
-                edit_selected_prompt_btn_main: gr.update(visible=False),
-                refresh_prompts_btn: gr.update(visible=False),
                 prompt_form_view: gr.update(visible=True),
+                confirm_prompt_delete_view: gr.update(visible=False),
                 prompt_form_title: "### Create New Prompt",
                 prompt_form_editing_id_hidden: None,
                 prompt_form_name_input: "",
@@ -711,11 +681,8 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
 
         def show_edit_prompt_form(prompt_id, name, text_content):
             return {
-                prompt_data_df.parent: gr.update(visible=False),
-                create_new_prompt_btn_main: gr.update(visible=False),
-                edit_selected_prompt_btn_main: gr.update(visible=False),
-                refresh_prompts_btn: gr.update(visible=False),
                 prompt_form_view: gr.update(visible=True),
+                confirm_prompt_delete_view: gr.update(visible=False),
                 prompt_form_title: f"### Edit Prompt (ID: {prompt_id})",
                 prompt_form_editing_id_hidden: prompt_id,
                 prompt_form_name_input: name,
@@ -740,9 +707,7 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
 
         create_new_prompt_btn_main.click(
             show_create_prompt_form,
-            outputs=[prompt_data_df.parent, create_new_prompt_btn_main, edit_selected_prompt_btn_main,
-                     refresh_prompts_btn,
-                     prompt_form_view, prompt_form_title, prompt_form_editing_id_hidden,
+            outputs=[prompt_form_view, confirm_prompt_delete_view, prompt_form_title, prompt_form_editing_id_hidden,
                      prompt_form_name_input, prompt_form_text_input,
                      delete_prompt_from_form_btn, set_default_prompt_from_form_btn,
                      prompt_form_id_state, prompt_form_name_state, prompt_form_text_state]
@@ -758,9 +723,7 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         edit_selected_prompt_btn_main.click(
             show_edit_prompt_form,
             inputs=[selected_prompt_id_state, prompt_form_name_state, prompt_form_text_state],
-            outputs=[prompt_data_df.parent, create_new_prompt_btn_main, edit_selected_prompt_btn_main,
-                     refresh_prompts_btn,
-                     prompt_form_view, prompt_form_title, prompt_form_editing_id_hidden,
+            outputs=[prompt_form_view, confirm_prompt_delete_view, prompt_form_title, prompt_form_editing_id_hidden,
                      prompt_form_name_input, prompt_form_text_input,
                      delete_prompt_from_form_btn, set_default_prompt_from_form_btn,
                      prompt_form_id_state, prompt_form_name_state, prompt_form_text_state]
@@ -772,23 +735,20 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
             else:  # Create
                 df_result = await handle_create_prompt(name, text_content)
 
-            updates = show_prompt_list_view()
+            updates = hide_prompt_forms_and_confirmations()
             updates[prompt_data_df] = df_result
             return updates
 
         save_prompt_btn.click(
             save_prompt_action_wrapper,
             inputs=[prompt_form_editing_id_hidden, prompt_form_name_input, prompt_form_text_input],
-            outputs=[prompt_data_df.parent, create_new_prompt_btn_main, edit_selected_prompt_btn_main,
-                     refresh_prompts_btn,
-                     prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df]
+            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df, edit_selected_prompt_btn_main]
         )
 
         cancel_prompt_form_btn.click(
-            show_prompt_list_view,
-            outputs=[prompt_data_df.parent, create_new_prompt_btn_main, edit_selected_prompt_btn_main,
-                     refresh_prompts_btn,
-                     prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state]
+            hide_prompt_forms_and_confirmations,
+            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, edit_selected_prompt_btn_main]
+
         )
 
         delete_prompt_from_form_btn.click(
@@ -800,21 +760,19 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
 
         async def set_default_prompt_action_wrapper(prompt_id):
             df_result = await handle_set_global_default_prompt(prompt_id)
-            updates = show_prompt_list_view()
+            updates = hide_prompt_forms_and_confirmations()
             updates[prompt_data_df] = df_result
             return updates
 
         set_default_prompt_from_form_btn.click(
             set_default_prompt_action_wrapper,
             inputs=[prompt_form_editing_id_hidden],
-            outputs=[prompt_data_df.parent, create_new_prompt_btn_main, edit_selected_prompt_btn_main,
-                     refresh_prompts_btn,
-                     prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df]
+            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df, edit_selected_prompt_btn_main]
         )
 
         async def delete_prompt_confirmed_action_wrapper(prompt_id_to_delete):
             df_result = await handle_delete_prompt(prompt_id_to_delete)
-            updates = show_prompt_list_view()
+            updates = hide_prompt_forms_and_confirmations()
             updates[prompt_data_df] = df_result
             updates[prompt_id_pending_deletion_state] = None
             return updates
@@ -822,35 +780,15 @@ def _build_prompts_tab(ui_blocks: gr.Blocks):
         confirm_prompt_delete_yes_btn.click(
             delete_prompt_confirmed_action_wrapper,
             inputs=[prompt_id_pending_deletion_state],
-            outputs=[prompt_data_df.parent, create_new_prompt_btn_main, edit_selected_prompt_btn_main,
-                     refresh_prompts_btn,
-                     prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df,
-                     prompt_id_pending_deletion_state]
+            outputs=[prompt_form_view, confirm_prompt_delete_view, selected_prompt_id_state, prompt_data_df, edit_selected_prompt_btn_main, prompt_id_pending_deletion_state]
         )
 
         confirm_prompt_delete_no_btn.click(  # Go back to edit form
             show_edit_prompt_form,
             inputs=[prompt_form_id_state, prompt_form_name_state, prompt_form_text_state],
-            outputs=[prompt_data_df.parent, create_new_prompt_btn_main, edit_selected_prompt_btn_main,
-                     refresh_prompts_btn,
-                     prompt_form_view, prompt_form_title, prompt_form_editing_id_hidden,
-                     prompt_form_name_input, prompt_form_text_input,
-                     delete_prompt_from_form_btn, set_default_prompt_from_form_btn,
-                     prompt_form_id_state, prompt_form_name_state, prompt_form_text_state,
-                     confirm_prompt_delete_view  # Also hide confirm view
-                     ]
         )
 
     ui_blocks.load(list_prompts_data, outputs=[prompt_data_df])
-
-
-# --- Model Pricing Management ---
-# This entire section is removed as pricing is now managed via YAML
-# async def list_model_pricing_data() -> pd.DataFrame: ... (Removed)
-# async def handle_create_model_pricing(...): ... (Removed)
-# async def handle_delete_model_pricing(pricing_id: int): ... (Removed)
-# def _build_model_pricing_tab(ui_blocks: gr.Blocks): ... (Removed)
-
 
 # --- Queue Management ---
 async def list_queued_checks_data(status_filter: str) -> pd.DataFrame:

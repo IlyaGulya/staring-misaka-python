@@ -1,6 +1,4 @@
 # tests/integration/test_web_ui_handlers.py
-import datetime
-from decimal import Decimal # Kept for other tests if any, though not for pricing
 from unittest.mock import AsyncMock
 
 import pandas as pd
@@ -11,11 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from staring_misaka.config import Settings # Required for setup_web_ui_globals
 import staring_misaka.web_ui as web_ui_module # For setting _app_settings in dashboard tests
 
-from staring_misaka.db_models import GlobalBotSettings, LLMModel, NewUser, Prompt, QueuedLLMCheck # ModelPricing removed
+from staring_misaka.db_models import GlobalBotSettings, LLMModel, NewUser, Prompt, QueuedLLMCheck
 from staring_misaka.web_ui import (
     # Dashboard
     get_bot_status,
-    get_llm_model_choices, # Still used by UI builder, testable if needed
     # LLM Models
     list_llm_models_data,
     handle_create_llm_model,
@@ -76,7 +73,10 @@ class TestWebUIDashboardHandlers:
         status_str = await get_bot_status()
         assert "DB Connected" in status_str
         assert "Items needing admin action in queue: 0" in status_str
-        assert f"Pricing Config: Not loaded or empty (Path: {test_settings.pricing_config_file_path})" in status_str
+        if test_settings.loaded_pricing_config and test_settings.loaded_pricing_config.models:
+            assert "Pricing Config: Loaded" in status_str
+        else:
+            assert f"Pricing Config: Not loaded or empty (Path: {test_settings.pricing_config_file_path})" in status_str
 
     async def test_get_bot_status_db_ok_with_queue_items(self, db_session: AsyncSession, mocker, test_settings: Settings):
         from staring_misaka.dto import MessageContext
@@ -94,7 +94,10 @@ class TestWebUIDashboardHandlers:
         status_str = await get_bot_status()
         assert "DB Connected" in status_str
         assert "Items needing admin action in queue: 1" in status_str
-        assert f"Pricing Config: Not loaded or empty (Path: {test_settings.pricing_config_file_path})" in status_str
+        if test_settings.loaded_pricing_config and test_settings.loaded_pricing_config.models:
+            assert "Pricing Config: Loaded" in status_str
+        else:
+            assert f"Pricing Config: Not loaded or empty (Path: {test_settings.pricing_config_file_path})" in status_str
 
     async def test_get_bot_status_db_error(self, db_session: AsyncSession, mocker, test_settings: Settings):
         mock_session_ctx_mgr = AsyncMock()
@@ -106,8 +109,11 @@ class TestWebUIDashboardHandlers:
         web_ui_module._app_settings = test_settings
         status_str = await get_bot_status()
         assert "DB Connection Error: ConnectionRefusedError" in status_str
-        assert "Items needing admin action in queue:" in status_str
-        assert f"Pricing Config: Not loaded or empty (Path: {test_settings.pricing_config_file_path})" in status_str
+        assert "Items needing admin action in queue:" in status_str # Count might be 0 or more depending on mock
+        if test_settings.loaded_pricing_config and test_settings.loaded_pricing_config.models:
+            assert "Pricing Config: Loaded" in status_str
+        else:
+            assert f"Pricing Config: Not loaded or empty (Path: {test_settings.pricing_config_file_path})" in status_str
 
 
 @pytest.mark.usefixtures("setup_web_ui_globals")
@@ -272,7 +278,7 @@ class TestWebUIQueueManagementHandlers:
         gs = await db_session.get(GlobalBotSettings, 1)
         assert gs
         assert gs.default_model_id
-        assert gs.default_prompt_id # Corrected from default_model_id
+        assert gs.default_prompt_id
 
         user_id_to_use = user_id_override if user_id_override else TEST_NEW_USER_ID
         message_id_to_use = 12345 + user_id_to_use + hash(reason) % 1000
