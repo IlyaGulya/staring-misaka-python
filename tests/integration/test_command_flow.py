@@ -25,6 +25,39 @@ from tests.conftest import (
 pytestmark = pytest.mark.asyncio
 
 
+async def test_start_command(command_handlers, mock_telegram_client):
+    """
+    GIVEN a user sends /start
+    WHEN the start_handler is called
+    THEN a help message with a list of commands should be replied.
+    """
+    # Arrange
+    mock_event = MagicMock(
+        is_private=True,  # /start can be used in private or group
+        chat_id=TEST_SUPER_ADMIN_ID,  # or any chat_id
+        sender_id=TEST_SUPER_ADMIN_ID,
+        text="/start",
+        reply=AsyncMock()
+    )
+
+    # Act
+    await command_handlers.start_handler(mock_event)
+
+    # Assert
+    mock_event.reply.assert_called_once()
+    reply_text = mock_event.reply.call_args[0][0]
+
+    assert "Welcome to Staring Misaka Bot!" in reply_text
+    assert "/add_group" in reply_text
+    assert "/remove_group" in reply_text
+    assert "/config_group <setting_name> <value>" in reply_text
+    assert "approval_required <true|false>" in reply_text
+    assert "If true, detected spam will require manual approval before a ban." in reply_text
+    assert "For Super Admins" not in reply_text
+    assert "Web UI" not in reply_text # Assuming Web UI is for super admins, not general end users via /start
+    assert "If you need further assistance, please contact the bot operator." in reply_text
+
+
 async def test_add_group_command_by_admin(
         db_session, mock_telegram_client, command_handlers, event_handlers
 ):

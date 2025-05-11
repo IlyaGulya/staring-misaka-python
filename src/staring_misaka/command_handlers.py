@@ -309,13 +309,47 @@ class CommandHandlers:
             else:
                 await event.reply(f"❓ Unknown setting '{setting}'. See command help for available settings.")
 
+    async def start_handler(self, event: events.NewMessage.Event):
+        """Handles the /start command, providing a help message."""
+        help_message = """Welcome to Staring Misaka Bot!
+I help protect your groups from spam using AI.
+
+Here are the available commands:
+
+**For Group Admins (use these inside your group):**
+  `/add_group`
+    Adds the current group to my monitoring list. I'll start checking messages from new users.
+
+  `/remove_group`
+    Removes the current group from my monitoring list.
+
+  `/config_group <setting_name> <value>`
+    Configures specific settings for the current group.
+    Available settings:
+      `approval_required <true|false>`  (Default: true)
+        If true, detected spam will require manual approval before a ban.
+        If false, I'll ban automatically based on AI detection.
+      `preban_message <true|false>`     (Default: true)
+        If true, I'll send the AI's reason to the chat before banning.
+      `delete_messages <true|false>`    (Default: true)
+        If true, I'll delete recent messages from a user when they are banned.
+      `delete_count <number>`           (Default: 1)
+        Number of recent messages to delete on ban (0 for none).
+      `group_prompt <prompt_id_or_name|none>`
+        Sets a custom AI prompt for this group. Use "none" to reset to global default.
+      `group_model <model_id_or_name|none>`
+        Sets a custom AI model for this group. Use "none" to reset to global default.
+
+If you need further assistance, please contact the bot operator."""
+        await event.reply(help_message)
+
     def register_handlers(self):
         """Registers all command handlers with the Telethon client."""
+        self.client.add_event_handler(self.start_handler, events.NewMessage(pattern=r"/start"))
         self.client.add_event_handler(self.add_group_handler, events.NewMessage(pattern=r"/add_group"))
         self.client.add_event_handler(self.remove_group_handler, events.NewMessage(pattern=r"/remove_group"))
         # Ensure admin_reply_handler comes BEFORE any generic message handler if both could match
         self.client.add_event_handler(self.admin_reply_handler, events.NewMessage(incoming=True, func=lambda
             e: e.is_private and e.reply_to_msg_id is not None))
         self.client.add_event_handler(self.config_group_handler, events.NewMessage(pattern=r"/config_group"))
-
         logger.info("Command handlers registered (some moved to Web UI).")
