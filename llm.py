@@ -1,6 +1,5 @@
 import logging
 import instructor
-from anthropic import AsyncAnthropic
 from pydantic import BaseModel
 
 from env import ANTHROPIC_API_KEY
@@ -11,10 +10,8 @@ class SpamCheckResponse(BaseModel):
     is_spam: bool
 
 class Llm:
-    instructor_client: instructor.Instructor | instructor.AsyncInstructor
-
-    def __init__(self, instructor_client: instructor.Instructor | instructor.AsyncInstructor):
-        self.instructor_client = instructor_client
+    def __init__(self, client):
+        self.client = client
         logger.info("LLM instance initialized")
 
     async def is_spam(self, message_text):
@@ -33,8 +30,7 @@ class Llm:
         try:
             # Send the request to Claude
             logger.info("Sending request to Claude")
-            resp, completion = await self.instructor_client.messages.create_with_completion(
-                model="claude-3-haiku-20240307",  # Replace with the appropriate model name
+            resp = await self.client.chat.completions.create(
                 max_tokens=1024,
                 messages=[
                     {
@@ -53,11 +49,10 @@ class Llm:
 def create_llm() -> Llm:
     logger.info("Creating LLM instance")
     try:
-        anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-        logger.info("AsyncAnthropic client created")
-        instructor_client = instructor.from_anthropic(anthropic_client)
+        # Use instructor.from_provider with Anthropic
+        client = instructor.from_provider("anthropic/claude-3-haiku-20240307", api_key=ANTHROPIC_API_KEY)
         logger.info("Instructor client created")
-        return Llm(instructor_client)
+        return Llm(client)
     except Exception as e:
         logger.error(f"Error creating LLM instance: {str(e)}")
         raise

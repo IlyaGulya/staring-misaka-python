@@ -2,8 +2,7 @@
 authors = [{ name = "Ilya Gulya", email = "ilya@gulya.me" }]
 dependencies = [
     "telethon==1.36.0",
-    "instructor==1.4.1",
-    "anthropic>=0.34.2,<0.35",
+    "instructor==1.10.0",
     "sqlalchemy>=2.0.35,<3",
 ]
 description = "Add a short description here"
