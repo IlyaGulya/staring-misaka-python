@@ -4,6 +4,7 @@ dependencies = [
     "telethon==1.36.0",
     "instructor==1.10.0",
     "sqlalchemy>=2.0.35,<3",
+    "anthropic==0.58.2"
 ]
 description = "Add a short description here"
 name = "staring_misaka"
@@ -20,7 +21,6 @@ platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
 
 [tool.pixi.dependencies]
 pixi-pycharm = ">=0.0.6,<0.0.7"
-anthropic = ">=0.58.2,<0.59"
 
 [tool.hatch.build.targets.wheel]
 include = ["*.py"]
