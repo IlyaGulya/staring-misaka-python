@@ -30,7 +30,7 @@ class Llm:
         try:
             # Send the request to Claude
             logger.info("Sending request to Claude")
-            resp = await self.client.chat.completions.create(
+            resp = self.client.chat.completions.create(
                 max_tokens=1024,
                 messages=[
                     {

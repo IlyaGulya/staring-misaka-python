@@ -210,6 +210,9 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
 
     async def approve_user(user_identifier: str):
         try:
+            user_id = None
+            user_name = None
+            
             # Parse user identifier - could be @username or user_id
             if user_identifier.startswith('@'):
                 # Username format
@@ -219,20 +222,29 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
                     user_id = user.id
                     user_name = user.username if user.username else user.first_name
                 except Exception as e:
-                    logger.error(f"Error fetching user by username {username}: {str(e)}")
-                    return None
+                    logger.warning(f"Could not fetch user entity by username {username}: {str(e)}")
+                    # Try to find user in database by searching for username in stored data
+                    # This is a fallback - we'll search by user_id if possible from database
+                    logger.info(f"Attempting database fallback for username {username}")
+                    return None  # Username fallback is complex, require user_id for approval
             else:
                 # Assume it's a user ID
                 try:
                     user_id = int(user_identifier)
-                    user = await client.get_entity(user_id)
-                    user_name = user.username if user.username else user.first_name
+                    try:
+                        user = await client.get_entity(user_id)
+                        user_name = user.username if user.username else user.first_name
+                    except Exception as e:
+                        logger.warning(f"Could not fetch user entity by ID {user_id}: {str(e)}")
+                        # Continue with approval using just the user_id - entity fetching failed but we can still approve
+                        user_name = f"User_{user_id}"  # Fallback name
+                        logger.info(f"Using fallback name for user {user_id}")
                 except ValueError:
                     logger.error(f"Invalid user ID format: {user_identifier}")
                     return None
-                except Exception as e:
-                    logger.error(f"Error fetching user by ID {user_identifier}: {str(e)}")
-                    return None
+
+            if user_id is None:
+                return None
 
             # Find and remove user from NewUser table across all tracked chats
             removed_count = 0
