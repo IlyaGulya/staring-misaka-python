@@ -87,6 +87,40 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
         else:
             logger.info(f"Message from existing user {sender.id}, ignoring")
 
+    @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS + [ADMIN_ID], pattern=r'^/notspam'))
+    async def notspam_command_handler(event):
+        # Only allow admin to use this command
+        if event.sender_id != ADMIN_ID:
+            logger.info(f"Non-admin user {event.sender_id} tried to use /notspam command")
+            await event.reply("Don't touch me, baka!")
+            return
+            
+        chat_type = "private" if event.is_private else "group"
+        logger.info(f"Admin {event.sender_id} used /notspam command in {chat_type} chat")
+        
+        parts = event.raw_text.split()
+        if len(parts) < 2:
+            await event.reply("Usage: /notspam <@username or user_id>")
+            return
+        
+        user_identifier = parts[1]
+        approved_user = await approve_user(user_identifier)
+        if approved_user:
+            await event.reply(f"User {approved_user['name']} (ID: {approved_user['id']}) has been approved and removed from monitoring.")
+        else:
+            await event.reply("User not found in monitoring list or error occurred.")
+
+    @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS, pattern=r'^/(toggle_approval|status)'))
+    async def admin_commands_group_handler(event):
+        # Only allow admin to use these commands in group chats
+        if event.sender_id != ADMIN_ID:
+            logger.info(f"Non-admin user {event.sender_id} tried to use admin command: {event.raw_text}")
+            await event.reply("Don't touch me, baka!")
+            return
+            
+        # Admin is using command in group - redirect to private chat
+        await event.reply("Please use admin commands in private chat with me.")
+
     async def notify_admin(sender, message_text, event):
         logger.info(f"Notifying admin about potential spam from user {sender.id}")
         # Send a message to the admin
@@ -157,20 +191,8 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
                 admin_settings = session.query(AdminSettings).first()
                 await event.reply(
                     f"Admin approval is currently {'required' if admin_settings.require_approval else 'not required'}")
-            elif command == '/approve':
-                parts = event.raw_text.split()
-                if len(parts) < 2:
-                    await event.reply("Usage: /approve <@username or user_id>")
-                    return
-                
-                user_identifier = parts[1]
-                approved_user = await approve_user(user_identifier)
-                if approved_user:
-                    await event.reply(f"User {approved_user['name']} (ID: {approved_user['id']}) has been approved and removed from monitoring.")
-                else:
-                    await event.reply("User not found in monitoring list or error occurred.")
             else:
-                await event.reply("Unknown command. Available commands: /toggle_approval, /status, /approve")
+                await event.reply("Unknown command. Available commands: /toggle_approval, /status, /notspam")
         elif event.reply_to_msg_id:
             # Check if this is a reply to our pending ban request
             pending_request = session.query(PendingBanRequest).filter_by(
