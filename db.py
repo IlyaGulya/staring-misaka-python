@@ -65,6 +65,23 @@ class BannedUser(Base):
         )
 
 
+class ApprovedUser(Base):
+    __tablename__ = 'approved_users'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    approved_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"ApprovedUser(id={self.id!r}, user_id={self.user_id!r}, "
+            f"chat_id={self.chat_id!r}, approved_at={self.approved_at!r})"
+        )
+
+
 class AdminSettings(Base):
     __tablename__ = 'admin_settings'
 

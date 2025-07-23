@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from telethon import TelegramClient, events
 from telethon.tl.types import UpdateChannelParticipant
 
-from db import NewUser, PendingBanRequest, BannedUser, AdminSettings
+from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser
 from env import TRACKING_CHAT_IDS, API_ID, API_HASH, ADMIN_ID, BOT_SESSION_PATH
 from llm import Llm
 from userbot import UserBot
@@ -29,6 +29,12 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
         if (event.user_added or event.user_joined) and isinstance(event.original_update, UpdateChannelParticipant):
             user_id = event.user.id
             logger.info(f"User {user_id} was added to the group {event.chat_id}")
+
+            # Check if user is pre-approved
+            approved_user = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
+            if approved_user:
+                logger.info(f"User {user_id} is pre-approved, skipping monitoring")
+                return
 
             # Check if the user already exists in the new_users table
             existing_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
@@ -55,6 +61,12 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
         logger.info(f"New message event received: {event}")
         sender = await event.get_sender()
         logger.info(f"Message sender: {sender.id}")
+
+        # Check if sender is pre-approved
+        approved_user = session.query(ApprovedUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
+        if approved_user:
+            logger.info(f"Message from pre-approved user {sender.id}, ignoring")
+            return
 
         # Check if sender is in the new_users table
         new_user = session.query(NewUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
@@ -87,7 +99,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
         else:
             logger.info(f"Message from existing user {sender.id}, ignoring")
 
-    @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS + [ADMIN_ID], pattern=r'^/notspam'))
+    @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS, pattern=r'^/notspam'))
     async def notspam_command_handler(event):
         # Only allow admin to use this command
         if event.sender_id != ADMIN_ID:
@@ -95,8 +107,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             await event.reply("Don't touch me, baka!")
             return
             
-        chat_type = "private" if event.is_private else "group"
-        logger.info(f"Admin {event.sender_id} used /notspam command in {chat_type} chat")
+        logger.info(f"Admin {event.sender_id} used /notspam command in group chat {event.chat_id}")
         
         parts = event.raw_text.split()
         if len(parts) < 2:
@@ -104,7 +115,8 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             return
         
         user_identifier = parts[1]
-        approved_user = await approve_user(user_identifier)
+        approved_user = await approve_user(user_identifier, event.chat_id)
+            
         if approved_user:
             await event.reply(f"User {approved_user['name']} (ID: {approved_user['id']}) has been approved and removed from monitoring.")
         else:
@@ -192,7 +204,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
                 await event.reply(
                     f"Admin approval is currently {'required' if admin_settings.require_approval else 'not required'}")
             else:
-                await event.reply("Unknown command. Available commands: /toggle_approval, /status, /notspam")
+                await event.reply("Unknown command. Available commands: /toggle_approval, /status")
         elif event.reply_to_msg_id:
             # Check if this is a reply to our pending ban request
             pending_request = session.query(PendingBanRequest).filter_by(
@@ -230,7 +242,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             is_spam = await llm.is_spam(event.raw_text)
             await client.send_message(ADMIN_ID, f"Is spam: {is_spam}")
 
-    async def approve_user(user_identifier: str):
+    async def approve_user(user_identifier: str, target_chat_id: int):
         try:
             user_id = None
             user_name = None
@@ -268,22 +280,33 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             if user_id is None:
                 return None
 
-            # Find and remove user from NewUser table across all tracked chats
+            # Remove user from NewUser table for the specific chat
+            new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=target_chat_id).first()
             removed_count = 0
-            for chat_id in TRACKING_CHAT_IDS:
-                new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
-                if new_user:
-                    session.delete(new_user)
-                    removed_count += 1
-                    logger.info(f"Removed user {user_id} from monitoring in chat {chat_id}")
+            if new_user:
+                session.delete(new_user)
+                removed_count = 1
+                logger.info(f"Removed user {user_id} from monitoring in chat {target_chat_id}")
 
-            if removed_count > 0:
+            # Add user to approved users list for the specific chat only
+            existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=target_chat_id).first()
+            approved_count = 0
+            if not existing_approval:
+                approved_user = ApprovedUser(user_id=user_id, chat_id=target_chat_id)
+                session.add(approved_user)
+                approved_count = 1
+                logger.info(f"Added user {user_id} to approved list for chat {target_chat_id}")
+
+            if removed_count > 0 or approved_count > 0:
                 session.commit()
-                logger.info(f"User {user_id} approved and removed from monitoring in {removed_count} chat(s)")
+                if removed_count > 0:
+                    logger.info(f"User {user_id} removed from monitoring in chat {target_chat_id}")
+                if approved_count > 0:
+                    logger.info(f"User {user_id} added to approved list for chat {target_chat_id}")
                 return {"id": user_id, "name": user_name}
             else:
-                logger.info(f"User {user_id} was not found in monitoring list")
-                return None
+                logger.info(f"User {user_id} was already approved for chat {target_chat_id}")
+                return {"id": user_id, "name": user_name}
 
         except Exception as e:
             logger.error(f"Error approving user {user_identifier}: {str(e)}")
@@ -298,14 +321,22 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             return None
 
     async def check_user_approval(user_id: int, chat_id: int):
-        # This is a placeholder function. You should implement your own logic
-        # to determine when a user should be approved (e.g., after a certain number of non-spam messages)
-        # For now, we'll just remove the user from the NewUser table
+        # Auto-approve users who pass spam checks by removing from monitoring and adding to approved list
         new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
         if new_user:
+            # Remove from monitoring
             session.delete(new_user)
+            logger.info(f"User {user_id} removed from monitoring in chat {chat_id}")
+            
+            # Add to approved users list
+            existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+            if not existing_approval:
+                approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id)
+                session.add(approved_user)
+                logger.info(f"User {user_id} auto-approved and added to approved list for chat {chat_id}")
+            
             session.commit()
-            logger.info(f"User {user_id} has been approved and removed from NewUser table")
+            logger.info(f"User {user_id} has been automatically approved after passing spam check")
 
     logger.info("Bot setup complete")
     return client
