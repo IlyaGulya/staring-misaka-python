@@ -157,8 +157,20 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
                 admin_settings = session.query(AdminSettings).first()
                 await event.reply(
                     f"Admin approval is currently {'required' if admin_settings.require_approval else 'not required'}")
+            elif command == '/approve':
+                parts = event.raw_text.split()
+                if len(parts) < 2:
+                    await event.reply("Usage: /approve <@username or user_id>")
+                    return
+                
+                user_identifier = parts[1]
+                approved_user = await approve_user(user_identifier)
+                if approved_user:
+                    await event.reply(f"User {approved_user['name']} (ID: {approved_user['id']}) has been approved and removed from monitoring.")
+                else:
+                    await event.reply("User not found in monitoring list or error occurred.")
             else:
-                await event.reply("Unknown command. Available commands: /toggle_approval, /status")
+                await event.reply("Unknown command. Available commands: /toggle_approval, /status, /approve")
         elif event.reply_to_msg_id:
             # Check if this is a reply to our pending ban request
             pending_request = session.query(PendingBanRequest).filter_by(
@@ -195,6 +207,53 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             # Existing code for processing non-reply messages from admin
             is_spam = await llm.is_spam(event.raw_text)
             await client.send_message(ADMIN_ID, f"Is spam: {is_spam}")
+
+    async def approve_user(user_identifier: str):
+        try:
+            # Parse user identifier - could be @username or user_id
+            if user_identifier.startswith('@'):
+                # Username format
+                username = user_identifier[1:]  # Remove @ symbol
+                try:
+                    user = await client.get_entity(username)
+                    user_id = user.id
+                    user_name = user.username if user.username else user.first_name
+                except Exception as e:
+                    logger.error(f"Error fetching user by username {username}: {str(e)}")
+                    return None
+            else:
+                # Assume it's a user ID
+                try:
+                    user_id = int(user_identifier)
+                    user = await client.get_entity(user_id)
+                    user_name = user.username if user.username else user.first_name
+                except ValueError:
+                    logger.error(f"Invalid user ID format: {user_identifier}")
+                    return None
+                except Exception as e:
+                    logger.error(f"Error fetching user by ID {user_identifier}: {str(e)}")
+                    return None
+
+            # Find and remove user from NewUser table across all tracked chats
+            removed_count = 0
+            for chat_id in TRACKING_CHAT_IDS:
+                new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+                if new_user:
+                    session.delete(new_user)
+                    removed_count += 1
+                    logger.info(f"Removed user {user_id} from monitoring in chat {chat_id}")
+
+            if removed_count > 0:
+                session.commit()
+                logger.info(f"User {user_id} approved and removed from monitoring in {removed_count} chat(s)")
+                return {"id": user_id, "name": user_name}
+            else:
+                logger.info(f"User {user_id} was not found in monitoring list")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error approving user {user_identifier}: {str(e)}")
+            return None
 
     async def get_user_name(user_id):
         try:
