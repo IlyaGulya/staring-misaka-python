@@ -1,6 +1,6 @@
 import datetime
 
-from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func
+from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func, UniqueConstraint, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 
 
@@ -12,10 +12,17 @@ class NewUser(Base):
     __tablename__ = 'new_users'
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
-    chat_id: Mapped[int] = mapped_column(Integer, nullable=False)  # Add this line
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     join_time: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
+    )
+
+    # Composite unique constraint: user can only be monitored once per chat
+    # Performance index for user lookups
+    __table_args__ = (
+        UniqueConstraint("user_id", "chat_id", name="uq_new_users_user_chat"),
+        Index("ix_new_users_user_chat", "user_id", "chat_id"),
     )
 
     def __repr__(self) -> str:
@@ -33,6 +40,11 @@ class PendingBanRequest(Base):
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
+    )
+
+    # Performance index for admin sender lookups
+    __table_args__ = (
+        Index("ix_pending_ban_requests_sender_id", "sender_id"),
     )
 
     def __repr__(self) -> str:
@@ -56,6 +68,12 @@ class BannedUser(Base):
         DateTime, server_default=func.now()
     )
 
+    # Performance indexes for user ban lookups
+    __table_args__ = (
+        Index("ix_banned_users_user_id", "user_id"),
+        Index("ix_banned_users_user_chat", "user_id", "chat_id"),
+    )
+
     def __repr__(self) -> str:
         return (
             f"BannedUser(id={self.id!r}, user_id={self.user_id!r}, user_name={self.user_name!r}, "
@@ -71,6 +89,13 @@ class ApprovedUser(Base):
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     approved_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
+    )
+
+    # Composite unique constraint: user can only be approved once per chat
+    # Performance index for user lookups
+    __table_args__ = (
+        UniqueConstraint("user_id", "chat_id", name="uq_approved_users_user_chat"),
+        Index("ix_approved_users_user_chat", "user_id", "chat_id"),
     )
 
     def __repr__(self) -> str:
@@ -106,6 +131,15 @@ class MessageQueue(Base):
     processed_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
     spam_result: Mapped[bool] = mapped_column(Boolean, nullable=True)
+
+    # Unique constraint to prevent duplicate messages from same user/chat/message
+    # Performance indexes for queue processing hot paths
+    __table_args__ = (
+        UniqueConstraint("user_id", "chat_id", "message_id", name="uq_message_queue_triplet"),
+        Index("ix_message_queue_status_nextretry_created", "status", "next_retry_at", "created_at"),
+        Index("ix_message_queue_status_processed_at", "status", "processed_at"),
+        Index("ix_message_queue_user_chat", "user_id", "chat_id"),
+    )
 
     def __repr__(self) -> str:
         return (
