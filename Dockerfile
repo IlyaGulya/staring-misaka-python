@@ -1,10 +1,19 @@
-FROM python:3.12-alpine
+FROM ghcr.io/prefix-dev/pixi:0.51.0-noble
 
-COPY pyproject.toml /app/
+# Set working directory
 WORKDIR /app
 
-RUN python -m pip install .
+# Copy pixi configuration files first for better layer caching
+COPY pyproject.toml pixi.lock ./
 
+# Install dependencies using pixi
+RUN pixi install --frozen
+
+# Copy the rest of the application
 COPY . .
 
-CMD ["python", "main.py"]
+# Make entrypoint script executable
+RUN chmod +x docker-entrypoint.sh
+
+# Use our custom entrypoint
+ENTRYPOINT ["./docker-entrypoint.sh"]

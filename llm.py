@@ -1,12 +1,27 @@
 import logging
-import instructor
-from pydantic import BaseModel
+import warnings
 
-from env import ANTHROPIC_API_KEY
+# Suppress Pydantic v1 deprecation warnings from external libraries
+warnings.filterwarnings(
+    "ignore",
+    message=r"Support for class-based.*config.*is deprecated.*",
+    category=DeprecationWarning
+)
+
+import instructor
+from pydantic import BaseModel, ConfigDict
+
 
 logger = logging.getLogger(__name__)
 
 class SpamCheckResponse(BaseModel):
+    model_config = ConfigDict(
+        # Enable frozen mode for immutability
+        frozen=True,
+        # Validate assignments
+        validate_assignment=True,
+    )
+    
     is_spam: bool
 
 class Llm:
@@ -46,11 +61,12 @@ class Llm:
             logger.error(f"Error during spam check: {str(e)}")
             raise
 
-def create_llm() -> Llm:
+def create_llm(config) -> Llm:
+    """Create LLM instance with the given configuration"""
     logger.info("Creating LLM instance")
     try:
         # Use instructor.from_provider with Anthropic
-        client = instructor.from_provider("anthropic/claude-3-haiku-20240307", api_key=ANTHROPIC_API_KEY)
+        client = instructor.from_provider("anthropic/claude-3-haiku-20240307", api_key=config.anthropic_api_key)
         logger.info("Instructor client created")
         return Llm(client)
     except Exception as e:

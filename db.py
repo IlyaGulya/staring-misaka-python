@@ -1,9 +1,7 @@
 import datetime
 
-from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean
+from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
-
-from env import DB_PATH
 
 
 class Base(DeclarativeBase):
@@ -17,7 +15,7 @@ class NewUser(Base):
     user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)  # Add this line
     join_time: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, server_default=func.now()
     )
 
     def __repr__(self) -> str:
@@ -34,7 +32,7 @@ class PendingBanRequest(Base):
     original_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, server_default=func.now()
     )
 
     def __repr__(self) -> str:
@@ -55,7 +53,7 @@ class BannedUser(Base):
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
     banned_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, server_default=func.now()
     )
 
     def __repr__(self) -> str:
@@ -72,7 +70,7 @@ class ApprovedUser(Base):
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     approved_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, server_default=func.now()
     )
 
     def __repr__(self) -> str:
@@ -92,8 +90,33 @@ class AdminSettings(Base):
         return f"AdminSettings(id={self.id!r}, require_approval={self.require_approval!r})"
 
 
-def create_session() -> Session:
-    engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
+class MessageQueue(Base):
+    __tablename__ = 'message_queue'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default='pending')  # pending, processing, completed, failed
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    next_retry_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    processed_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, nullable=True)
+    spam_result: Mapped[bool] = mapped_column(Boolean, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"MessageQueue(id={self.id!r}, user_id={self.user_id!r}, chat_id={self.chat_id!r}, "
+            f"message_id={self.message_id!r}, status={self.status!r}, retry_count={self.retry_count!r})"
+        )
+
+
+def create_session(config) -> Session:
+    """Create database session with the given configuration"""
+    engine = create_engine(f'sqlite:///{config.db_path}', echo=False)
     Session = sessionmaker(bind=engine)
     session = Session()
 

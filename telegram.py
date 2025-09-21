@@ -1,13 +1,12 @@
 import logging
-from datetime import datetime
+from datetime import datetime, UTC
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from telethon import TelegramClient, events
 from telethon.tl.types import UpdateChannelParticipant
 
-from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser
-from env import TRACKING_CHAT_IDS, API_ID, API_HASH, ADMIN_ID, BOT_SESSION_PATH
+from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue
 from llm import Llm
 from userbot import UserBot
 
@@ -15,14 +14,14 @@ from userbot import UserBot
 logger = logging.getLogger(__name__)
 
 
-def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
-    client = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH)
+def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_processor=None) -> TelegramClient:
+    client = TelegramClient(config.bot_session_path, config.api_id, config.api_hash)
     logger.info("Creating Telegram bot client")
 
-    @client.on(events.ChatAction(chats=TRACKING_CHAT_IDS))
+    @client.on(events.ChatAction(chats=config.tracking_chat_ids))
     async def chat_action_handler(event):
         logger.info(f"Chat action event received: {event}")
-        if event.chat_id not in TRACKING_CHAT_IDS:
+        if event.chat_id not in config.tracking_chat_ids:
             logger.info(f"Ignoring event from non-tracked chat: {event.chat_id}")
             return
         # Check if a user has joined or been added to the group
@@ -41,7 +40,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
 
             if existing_user:
                 logger.info(f"User {user_id} already exists in NewUser table. Updating join time.")
-                existing_user.join_time = datetime.utcnow()
+                existing_user.join_time = datetime.now(UTC)
             else:
                 logger.info(f"Adding new user {user_id} to NewUser table")
                 new_user = NewUser(user_id=user_id, chat_id=event.chat_id)
@@ -56,7 +55,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
         else:
             logger.info("Ignoring non-user-added event or non-UpdateChannelParticipant event")
 
-    @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS))
+    @client.on(events.NewMessage(chats=config.tracking_chat_ids))
     async def message_handler(event):
         logger.info(f"New message event received: {event}")
         sender = await event.get_sender()
@@ -74,35 +73,50 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             logger.info(f"Processing message from new user {sender.id}")
             message_text = event.raw_text
             logger.info(f"Message text: {message_text}")
-            # Send to Claude API to check if spam
-            is_spam = await llm.is_spam(message_text)
-            logger.info(f"Spam check result for user {sender.id}: {is_spam}")
-
-            admin_settings = session.query(AdminSettings).first()
-
-            if is_spam:
-                if admin_settings.require_approval:
-                    # Notify admin
-                    await notify_admin(sender, message_text, event)
-                else:
-                    # Automatically ban the user
-                    await process_ban(
-                        user_id=sender.id,
-                        chat_id=event.chat_id,
-                        message_id=event.id,
-                        message_text=message_text,
-                        is_automatic=True
-                    )
+            
+            # Add message to queue for processing instead of direct spam check
+            if queue_processor:
+                queue_processor.add_message_to_queue(
+                    user_id=sender.id,
+                    chat_id=event.chat_id,
+                    message_id=event.id,
+                    message_text=message_text
+                )
+                logger.info(f"Added message from user {sender.id} to processing queue")
             else:
-                # If not spam, check if user should be approved
-                await check_user_approval(sender.id, event.chat_id)
+                logger.warning("Queue processor not available, falling back to direct spam check")
+                # Fallback to direct spam check if queue processor is not available
+                try:
+                    is_spam = await llm.is_spam(message_text)
+                    logger.info(f"Spam check result for user {sender.id}: {is_spam}")
+
+                    admin_settings = session.query(AdminSettings).first()
+
+                    if is_spam:
+                        if admin_settings.require_approval:
+                            # Notify admin
+                            await notify_admin(sender, message_text, event)
+                        else:
+                            # Automatically ban the user
+                            await process_ban(
+                                user_id=sender.id,
+                                chat_id=event.chat_id,
+                                message_id=event.id,
+                                message_text=message_text,
+                                is_automatic=True
+                            )
+                    else:
+                        # If not spam, check if user should be approved
+                        await check_user_approval(sender.id, event.chat_id)
+                except Exception as e:
+                    logger.error(f"Error in fallback spam check for user {sender.id}: {str(e)}")
         else:
             logger.info(f"Message from existing user {sender.id}, ignoring")
 
-    @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS, pattern=r'^/notspam'))
+    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/notspam'))
     async def notspam_command_handler(event):
         # Only allow admin to use this command
-        if event.sender_id != ADMIN_ID:
+        if event.sender_id != config.admin_id:
             logger.info(f"Non-admin user {event.sender_id} tried to use /notspam command")
             await event.reply("Don't touch me, baka!")
             return
@@ -122,10 +136,10 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
         else:
             await event.reply("User not found in monitoring list or error occurred.")
 
-    @client.on(events.NewMessage(chats=TRACKING_CHAT_IDS, pattern=r'^/(toggle_approval|status)'))
+    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/(toggle_approval|status|queue_status|retry_failed|clear_completed)'))
     async def admin_commands_group_handler(event):
         # Only allow admin to use these commands in group chats
-        if event.sender_id != ADMIN_ID:
+        if event.sender_id != config.admin_id:
             logger.info(f"Non-admin user {event.sender_id} tried to use admin command: {event.raw_text}")
             await event.reply("Don't touch me, baka!")
             return
@@ -140,7 +154,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             f"User {sender.first_name} ({sender.id}) sent a message in chat {event.chat_id}:\n\n"
             f"{message_text}\n\nShould I ban this user? Reply 'yes' to ban."
         )
-        sent_message = await client.send_message(ADMIN_ID, admin_message)
+        sent_message = await client.send_message(config.admin_id, admin_message)
         logger.info(f"Sent admin notification message with ID: {sent_message.id}")
         # Store the pending request in the database
         pending_request = PendingBanRequest(
@@ -183,11 +197,11 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
             f"User {user_id} has been {'automatically ' if is_automatic else ''}banned "
             f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
         )
-        await client.send_message(ADMIN_ID, admin_message)
+        await client.send_message(config.admin_id, admin_message)
 
         return banned_user
 
-    @client.on(events.NewMessage(chats=[ADMIN_ID], from_users=[ADMIN_ID]))
+    @client.on(events.NewMessage(chats=[config.admin_id], from_users=[config.admin_id]))
     async def admin_reply_handler(event):
         logger.info(f"Received message from admin: {event}")
 
@@ -203,8 +217,34 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
                 admin_settings = session.query(AdminSettings).first()
                 await event.reply(
                     f"Admin approval is currently {'required' if admin_settings.require_approval else 'not required'}")
+            elif command == '/queue_status':
+                if queue_processor:
+                    status = queue_processor.get_queue_status()
+                    status_msg = (
+                        f"Queue Status:\n"
+                        f"• Pending: {status['pending']}\n"
+                        f"• Processing: {status['processing']}\n"
+                        f"• Failed: {status['failed']}\n"
+                        f"• Completed: {status['completed']}\n"
+                        f"• Total: {status['total']}"
+                    )
+                    await event.reply(status_msg)
+                else:
+                    await event.reply("Queue processor not available")
+            elif command == '/retry_failed':
+                if queue_processor:
+                    count = queue_processor.retry_failed_messages()
+                    await event.reply(f"Reset {count} failed messages to pending status")
+                else:
+                    await event.reply("Queue processor not available")
+            elif command == '/clear_completed':
+                if queue_processor:
+                    count = queue_processor.clear_completed_messages()
+                    await event.reply(f"Cleared {count} completed messages from queue")
+                else:
+                    await event.reply("Queue processor not available")
             else:
-                await event.reply("Unknown command. Available commands: /toggle_approval, /status")
+                await event.reply("Unknown command. Available commands: /toggle_approval, /status, /queue_status, /retry_failed, /clear_completed")
         elif event.reply_to_msg_id:
             # Check if this is a reply to our pending ban request
             pending_request = session.query(PendingBanRequest).filter_by(
@@ -230,7 +270,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
                 else:
                     logger.info(f"Admin did not approve ban for user {pending_request.sender_id}")
                     await client.send_message(
-                        ADMIN_ID, f"No action taken against user {pending_request.sender_id}."
+                        config.admin_id, f"No action taken against user {pending_request.sender_id}."
                     )
                     # Remove the pending request from the database
                     session.delete(pending_request)
@@ -240,7 +280,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot) -> TelegramClient:
         else:
             # Existing code for processing non-reply messages from admin
             is_spam = await llm.is_spam(event.raw_text)
-            await client.send_message(ADMIN_ID, f"Is spam: {is_spam}")
+            await client.send_message(config.admin_id, f"Is spam: {is_spam}")
 
     async def approve_user(user_identifier: str, target_chat_id: int):
         try:

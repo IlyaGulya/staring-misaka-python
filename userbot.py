@@ -2,14 +2,13 @@ import logging
 
 from telethon import TelegramClient
 
-from env import API_ID, API_HASH, USERBOT_SESSION_PATH
-
 logger = logging.getLogger(__name__)
 
 
 class UserBot:
-    def __init__(self):
-        self.client = TelegramClient(USERBOT_SESSION_PATH, API_ID, API_HASH)
+    def __init__(self, config):
+        self.config = config
+        self.client = TelegramClient(config.userbot_session_path, config.api_id, config.api_hash)
         logger.info("UserBot client initialized")
 
     def start(self):
@@ -32,5 +31,6 @@ class UserBot:
             logger.error(f"Error sending ban command: {str(e)}")
 
 
-def create_userbot() -> UserBot:
-    return UserBot()
+def create_userbot(config) -> UserBot:
+    """Create UserBot with the given configuration"""
+    return UserBot(config)
