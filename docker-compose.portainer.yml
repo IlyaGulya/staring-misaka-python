@@ -8,9 +8,12 @@ services:
     volumes:
       - staring_misaka_secret:/secret
       - staring_misaka_data:/data
+      - staring_misaka_backups:/backups
 
 volumes:
   staring_misaka_data:
     external: true
   staring_misaka_secret:
+    external: true
+  staring_misaka_backups:
     external: true

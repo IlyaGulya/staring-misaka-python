@@ -13,6 +13,32 @@ def error_exit(message: str) -> None:
     sys.exit(1)
 
 
+def backup_database(db_path: str) -> str:
+    """Create a backup of the database before migrations"""
+    import time
+
+    # Determine backup location - prefer mounted backup dir if available
+    backup_dir = "/backups" if Path("/backups").exists() else str(Path(db_path).parent)
+    db_name = Path(db_path).stem
+    backup_filename = f"{db_name}.backup_{int(time.time())}.db"
+    backup_path = str(Path(backup_dir) / backup_filename)
+
+    print(f"Creating database backup: {backup_path}")
+
+    try:
+        # Use SQLite's backup API for safe backup
+        source = sqlite3.connect(db_path)
+        backup = sqlite3.connect(backup_path)
+        source.backup(backup)
+        source.close()
+        backup.close()
+
+        print("Database backup completed successfully")
+        return backup_path
+    except Exception as e:
+        error_exit(f"Failed to create database backup: {e}")
+
+
 def run_cmd(cmd: list[str]) -> bool:
     """Run command and return success status"""
     try:
@@ -53,6 +79,11 @@ def main() -> None:
             error_exit(f"Missing database tables: {missing}")
     except Exception as e:
         error_exit(f"Database validation failed: {e}")
+
+    # Create database backup before any migration operations
+    if os.getenv("SKIP_BACKUP") != "true":
+        backup_path = backup_database(db_path)
+        print(f"Backup available at: {backup_path}")
 
     # Handle Alembic migration
     print("Checking migration status...")
