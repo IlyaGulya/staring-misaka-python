@@ -42,6 +42,8 @@ migrate-downgrade = "alembic downgrade -1"
 migrate-status = "alembic current && alembic history"
 migrate-setup-prod = "python scripts/production_migration_setup.py"
 migrate-rollback = "python scripts/rollback_migration.py"
+docker-entrypoint = "python docker-entrypoint.py"
+start = "python main.py"
 
 [tool.hatch.build.targets.wheel]
 include = ["*.py"]

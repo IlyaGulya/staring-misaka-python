@@ -1,4 +1,4 @@
-FROM ghcr.io/prefix-dev/pixi:0.51.0-noble
+FROM ghcr.io/prefix-dev/pixi:0.55.0-noble
 
 # Set working directory
 WORKDIR /app
@@ -12,8 +12,5 @@ RUN pixi install --frozen
 # Copy the rest of the application
 COPY . .
 
-# Make entrypoint script executable
-RUN chmod +x docker-entrypoint.sh
-
-# Use our custom entrypoint
-ENTRYPOINT ["./docker-entrypoint.sh"]
+# Use our custom entrypoint via pixi
+ENTRYPOINT ["pixi", "run", "docker-entrypoint"]
