@@ -185,7 +185,8 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             sender_id=sender.id,
             original_chat_id=event.chat_id,
             original_message_id=event.id,
-            message_text=message_text
+            message_text=message_text,
+            created_at=datetime.now()
         )
         session.add(pending_request)
         session.commit()
@@ -203,7 +204,8 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             user_id=user_id,
             user_name=await get_user_name(user_id),
             chat_id=chat_id,
-            message_text=message_text
+            message_text=message_text,
+            banned_at=datetime.now()
         )
         session.add(banned_user)
 
@@ -355,7 +357,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=target_chat_id).first()
             approved_count = 0
             if not existing_approval:
-                approved_user = ApprovedUser(user_id=user_id, chat_id=target_chat_id)
+                approved_user = ApprovedUser(user_id=user_id, chat_id=target_chat_id, approved_at=datetime.now())
                 session.add(approved_user)
                 approved_count = 1
                 logger.info(f"Added user {user_id} to approved list for chat {target_chat_id}")
@@ -445,7 +447,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             # Add to approved users list
             existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
             if not existing_approval:
-                approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id)
+                approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now())
                 session.add(approved_user)
                 logger.info(f"User {user_id} auto-approved and added to approved list for chat {chat_id}")
             

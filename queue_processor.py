@@ -229,7 +229,8 @@ class QueueProcessor:
                 sender_id=queue_item.user_id,
                 original_chat_id=queue_item.chat_id,
                 original_message_id=queue_item.message_id,
-                message_text=queue_item.message_text
+                message_text=queue_item.message_text,
+                created_at=datetime.now()
             )
             if session is None:
                 session = self.session
@@ -254,7 +255,8 @@ class QueueProcessor:
                 user_id=user_id,
                 user_name=user_name,
                 chat_id=chat_id,
-                message_text=message_text
+                message_text=message_text,
+                banned_at=datetime.now()
             )
             if session is None:
                 session = self.session
@@ -294,7 +296,7 @@ class QueueProcessor:
             # Add to approved users list
             existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
             if not existing_approval:
-                approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id)
+                approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now())
                 session.add(approved_user)
                 logger.info(f"User {user_id} auto-approved and added to approved list for chat {chat_id}")
                 
@@ -330,7 +332,8 @@ class QueueProcessor:
             chat_id=chat_id,
             message_id=message_id,
             message_text=message_text,
-            status='pending'
+            status='pending',
+            created_at=datetime.now()
         )
         
         self.session.add(queue_item)
