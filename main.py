@@ -34,15 +34,13 @@ async def main():
         bot = create_bot(session, llm, userbot, config)
         await bot.start(bot_token=config.bot_token)
         logger.info("Telegram bot started")
-        
+
         # Create queue processor
         queue_processor = QueueProcessor(session, llm, userbot, bot, config)
-        
-        # Re-create bot with queue processor
-        await bot.disconnect()
-        bot = create_bot(session, llm, userbot, config, queue_processor)
-        await bot.start(bot_token=config.bot_token)
-        logger.info("Telegram bot restarted with queue processor")
+
+        # Set queue processor reference on bot
+        bot.queue_processor = queue_processor
+        logger.info("Queue processor connected to bot")
         
         # Start queue processor
         queue_processor_task = asyncio.create_task(queue_processor.start())

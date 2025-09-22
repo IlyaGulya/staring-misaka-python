@@ -174,7 +174,8 @@ class TestAdminCommands:
         admin_event.reply = AsyncMock()
         
         # Test queue status command
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, processor)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot.queue_processor = processor
         
         # Simulate the command processing logic that would be in the actual handler
         status = processor.get_queue_status()

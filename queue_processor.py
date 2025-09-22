@@ -309,7 +309,10 @@ class QueueProcessor:
             user = await self.telegram_client.get_entity(user_id)
             return user.username if user.username else user.first_name
         except Exception as e:
-            logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
+            if "disconnected" in str(e).lower():
+                logger.warning(f"Telegram client disconnected while fetching user name for user_id {user_id}, using fallback")
+            else:
+                logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
             return f"User_{user_id}"
             
     def add_message_to_queue(self, user_id: int, chat_id: int, message_id: int, message_text: str) -> MessageQueue:

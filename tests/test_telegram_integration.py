@@ -40,7 +40,8 @@ class TestTelegramIntegration:
         test_session.commit()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot.queue_processor = queue_processor_with_integration
         # Get the handler we attached in create_bot
         message_handler = bot._handlers["message_handler"]
         
@@ -67,7 +68,8 @@ class TestTelegramIntegration:
         test_session.commit()
 
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot.queue_processor = queue_processor_with_integration
 
         message_handler = bot._handlers["message_handler"]
         await message_handler(mock_telegram_event)
@@ -82,7 +84,8 @@ class TestTelegramIntegration:
         # Don't create a NewUser entry - user is not being monitored
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot.queue_processor = queue_processor_with_integration
 
         message_handler = bot._handlers["message_handler"]
         await message_handler(mock_telegram_event)
@@ -103,7 +106,7 @@ class TestTelegramIntegration:
         mock_llm.is_spam = AsyncMock(return_value=False)
         
         # Create bot WITHOUT queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor=None)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
         
         message_handler = bot._handlers["message_handler"]
         await message_handler(mock_telegram_event)
@@ -134,7 +137,7 @@ class TestTelegramIntegration:
         mock_llm.is_spam = AsyncMock(side_effect=Exception("API overloaded"))
         
         # Create bot WITHOUT queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor=None)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
         
         message_handler = bot._handlers["message_handler"]
         # Should not raise exception - should handle error gracefully
@@ -164,7 +167,8 @@ class TestTelegramIntegration:
         admin_event.reply = AsyncMock()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot.queue_processor = queue_processor_with_integration
         
         admin_handler = bot._handlers["admin_reply_handler"]
         await admin_handler(admin_event)
@@ -202,7 +206,8 @@ class TestTelegramIntegration:
         admin_event.reply = AsyncMock()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot.queue_processor = queue_processor_with_integration
         
         admin_handler = bot._handlers["admin_reply_handler"]
         await admin_handler(admin_event)
@@ -239,7 +244,8 @@ class TestTelegramIntegration:
         admin_event.reply = AsyncMock()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot.queue_processor = queue_processor_with_integration
         
         admin_handler = bot._handlers["admin_reply_handler"]
         await admin_handler(admin_event)
@@ -263,7 +269,8 @@ class TestTelegramIntegration:
         non_admin_event.reply = AsyncMock()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
+        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot.queue_processor = queue_processor_with_integration
         
         admin_handler = bot._handlers["admin_reply_handler"]
         await admin_handler(non_admin_event)

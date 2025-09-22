@@ -26,7 +26,8 @@ class TestBotEventHandlers:
             mock_client.on = on_decorator
             mock_client_cls.return_value = mock_client
 
-            bot = create_bot(test_session, mock_llm, mock_userbot, test_config, mock_queue_processor)
+            bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+            bot.queue_processor = mock_queue_processor
             return bot, mock_client
     
     @pytest.mark.asyncio

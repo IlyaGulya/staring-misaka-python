@@ -14,9 +14,12 @@ from userbot import UserBot
 logger = logging.getLogger(__name__)
 
 
-def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_processor=None) -> TelegramClient:
+def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> TelegramClient:
     client = TelegramClient(config.bot_session_path, config.api_id, config.api_hash)
     logger.info("Creating Telegram bot client")
+
+    # Initialize queue processor reference (will be set later)
+    client.queue_processor = None
 
     @client.on(events.ChatAction(chats=config.tracking_chat_ids))
     async def chat_action_handler(event):
@@ -75,8 +78,8 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             logger.info(f"Message text: {message_text}")
             
             # Add message to queue for processing instead of direct spam check
-            if queue_processor:
-                queue_processor.add_message_to_queue(
+            if client.queue_processor:
+                client.queue_processor.add_message_to_queue(
                     user_id=sender.id,
                     chat_id=event.chat_id,
                     message_id=event.id,
@@ -243,8 +246,8 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
                 await event.reply(
                     f"Admin approval is currently {'required' if admin_settings.require_approval else 'not required'}")
             elif command == '/queue_status':
-                if queue_processor:
-                    status = queue_processor.get_queue_status()
+                if client.queue_processor:
+                    status = client.queue_processor.get_queue_status()
                     status_msg = (
                         f"Queue Status:\n"
                         f"• Pending: {status['pending']}\n"
@@ -257,14 +260,14 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
                 else:
                     await event.reply("Queue processor not available")
             elif command == '/retry_failed':
-                if queue_processor:
-                    count = queue_processor.retry_failed_messages()
+                if client.queue_processor:
+                    count = client.queue_processor.retry_failed_messages()
                     await event.reply(f"Reset {count} failed messages to pending status")
                 else:
                     await event.reply("Queue processor not available")
             elif command == '/clear_completed':
-                if queue_processor:
-                    count = queue_processor.clear_completed_messages()
+                if client.queue_processor:
+                    count = client.queue_processor.clear_completed_messages()
                     await event.reply(f"Cleared {count} completed messages from queue")
                 else:
                     await event.reply("Queue processor not available")
@@ -433,8 +436,11 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             user = await client.get_entity(user_id)
             return user.username if user.username else user.first_name
         except Exception as e:
-            logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
-            return None
+            if "disconnected" in str(e).lower():
+                logger.warning(f"Telegram client disconnected while fetching user name for user_id {user_id}, using fallback")
+            else:
+                logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
+            return f"User_{user_id}"
 
     async def check_user_approval(user_id: int, chat_id: int):
         # Auto-approve users who pass spam checks by removing from monitoring and adding to approved list
