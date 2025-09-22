@@ -43,7 +43,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
                 existing_user.join_time = datetime.now(UTC)
             else:
                 logger.info(f"Adding new user {user_id} to NewUser table")
-                new_user = NewUser(user_id=user_id, chat_id=event.chat_id)
+                new_user = NewUser(user_id=user_id, chat_id=event.chat_id, join_time=datetime.now(UTC))
                 session.add(new_user)
 
             try:
