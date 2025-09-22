@@ -113,19 +113,19 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
         else:
             logger.info(f"Message from existing user {sender.id}, ignoring")
 
-    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/notspam'))
-    async def notspam_command_handler(event):
+    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/approve'))
+    async def approve_command_handler(event):
         # Only allow admin to use this command
         if event.sender_id != config.admin_id:
-            logger.info(f"Non-admin user {event.sender_id} tried to use /notspam command")
+            logger.info(f"Non-admin user {event.sender_id} tried to use /approve command")
             await event.reply("Don't touch me, baka!")
             return
             
-        logger.info(f"Admin {event.sender_id} used /notspam command in group chat {event.chat_id}")
+        logger.info(f"Admin {event.sender_id} used /approve command in group chat {event.chat_id}")
         
         parts = event.raw_text.split()
         if len(parts) < 2:
-            await event.reply("Usage: /notspam <@username or user_id>")
+            await event.reply("Usage: /approve <@username or user_id>")
             return
         
         user_identifier = parts[1]
@@ -136,6 +136,29 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
         else:
             await event.reply("User not found in monitoring list or error occurred.")
 
+    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/unapprove'))
+    async def unapprove_command_handler(event):
+        # Only allow admin to use this command
+        if event.sender_id != config.admin_id:
+            logger.info(f"Non-admin user {event.sender_id} tried to use /unapprove command")
+            await event.reply("Don't touch me, baka!")
+            return
+
+        logger.info(f"Admin {event.sender_id} used /unapprove command in group chat {event.chat_id}")
+
+        parts = event.raw_text.split()
+        if len(parts) < 2:
+            await event.reply("Usage: /unapprove <@username or user_id>")
+            return
+
+        user_identifier = parts[1]
+        removed_user = await remove_approval(user_identifier, event.chat_id)
+
+        if removed_user:
+            await event.reply(f"User {removed_user['name']} (ID: {removed_user['id']}) approval has been removed. They will be monitored for spam again.")
+        else:
+            await event.reply("User not found in approved list or error occurred.")
+
     @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/(toggle_approval|status|queue_status|retry_failed|clear_completed)'))
     async def admin_commands_group_handler(event):
         # Only allow admin to use these commands in group chats
@@ -143,7 +166,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             logger.info(f"Non-admin user {event.sender_id} tried to use admin command: {event.raw_text}")
             await event.reply("Don't touch me, baka!")
             return
-            
+
         # Admin is using command in group - redirect to private chat
         await event.reply("Please use admin commands in private chat with me.")
 
@@ -352,6 +375,57 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             logger.error(f"Error approving user {user_identifier}: {str(e)}")
             return None
 
+    async def remove_approval(user_identifier: str, target_chat_id: int):
+        try:
+            user_id = None
+            user_name = None
+
+            # Parse user identifier - could be @username or user_id
+            if user_identifier.startswith('@'):
+                # Username format
+                username = user_identifier[1:]  # Remove @ symbol
+                try:
+                    user = await client.get_entity(username)
+                    user_id = user.id
+                    user_name = user.username if user.username else user.first_name
+                except Exception as e:
+                    logger.warning(f"Could not fetch user entity by username {username}: {str(e)}")
+                    logger.info(f"Attempting database fallback for username {username}")
+                    return None  # Username fallback is complex, require user_id for removal
+            else:
+                # Assume it's a user ID
+                try:
+                    user_id = int(user_identifier)
+                    try:
+                        user = await client.get_entity(user_id)
+                        user_name = user.username if user.username else user.first_name
+                    except Exception as e:
+                        logger.warning(f"Could not fetch user entity by ID {user_id}: {str(e)}")
+                        # Continue with removal using just the user_id - entity fetching failed but we can still remove
+                        user_name = f"User_{user_id}"  # Fallback name
+                        logger.info(f"Using fallback name for user {user_id}")
+                except ValueError:
+                    logger.error(f"Invalid user ID format: {user_identifier}")
+                    return None
+
+            if user_id is None:
+                return None
+
+            # Remove user from approved users list for the specific chat
+            approved_user = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=target_chat_id).first()
+            if approved_user:
+                session.delete(approved_user)
+                session.commit()
+                logger.info(f"Removed user {user_id} from approved list for chat {target_chat_id}")
+                return {"id": user_id, "name": user_name}
+            else:
+                logger.info(f"User {user_id} was not in approved list for chat {target_chat_id}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error removing approval for user {user_identifier}: {str(e)}")
+            return None
+
     async def get_user_name(user_id):
         try:
             user = await client.get_entity(user_id)
@@ -384,11 +458,13 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
     client._handlers = {
         "chat_action_handler": chat_action_handler,
         "message_handler": message_handler,
-        "notspam_command_handler": notspam_command_handler,
+        "approve_command_handler": approve_command_handler,
+        "unapprove_command_handler": unapprove_command_handler,
         "admin_commands_group_handler": admin_commands_group_handler,
         "admin_reply_handler": admin_reply_handler,
         # expose helpers used by handlers when convenient to assert on behavior
         "approve_user": approve_user,
+        "remove_approval": remove_approval,
         "get_user_name": get_user_name,
         "check_user_approval": check_user_approval,
     }

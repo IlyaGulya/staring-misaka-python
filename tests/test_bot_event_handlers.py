@@ -186,10 +186,10 @@ class TestBotEventHandlers:
         assert new_user_count == 0
     
     @pytest.mark.asyncio
-    async def test_notspam_command_handler_admin_approves_user(self, test_session, test_config, event_env):
-        """Test /notspam command handler when admin approves user"""
+    async def test_approve_command_handler_admin_approves_user(self, test_session, test_config, event_env):
+        """Test /approve command handler when admin approves user"""
         bot, mock_client = event_env
-        notspam_handler = bot._handlers["notspam_command_handler"]
+        approve_handler = bot._handlers["approve_command_handler"]
 
         # Create a new user to approve
         new_user = NewUser(
@@ -203,14 +203,14 @@ class TestBotEventHandlers:
         mock_event = MagicMock()
         mock_event.sender_id = test_config.admin_id
         mock_event.chat_id = test_config.tracking_chat_ids[0]
-        mock_event.raw_text = "/notspam 77777"
+        mock_event.raw_text = "/approve 77777"
         mock_event.reply = AsyncMock()
 
         # Client.get_entity should resolve the user for nicer messaging
         mock_client.get_entity = AsyncMock(return_value=MagicMock(id=77777, username="testuser", first_name="Test User"))
 
         # Run
-        await notspam_handler(mock_event)
+        await approve_handler(mock_event)
 
         # Assert: user removed from monitoring and added to approved
         from db import NewUser as NU, ApprovedUser as AU
@@ -219,29 +219,117 @@ class TestBotEventHandlers:
         mock_event.reply.assert_called()
     
     @pytest.mark.asyncio
-    async def test_notspam_command_handler_non_admin_rejected(self, test_session, test_config, event_env):
-        """Test /notspam command handler rejects non-admin users"""
+    async def test_approve_command_handler_non_admin_rejected(self, test_session, test_config, event_env):
+        """Test /approve command handler rejects non-admin users"""
         bot, _ = event_env
-        notspam_handler = bot._handlers["notspam_command_handler"]
+        approve_handler = bot._handlers["approve_command_handler"]
         # Create mock event for non-admin user
         mock_event = MagicMock()
         mock_event.sender_id = 12345  # Not the admin_id
         mock_event.chat_id = test_config.tracking_chat_ids[0]
-        mock_event.raw_text = "/notspam 77777"
+        mock_event.raw_text = "/approve 77777"
         mock_event.reply = AsyncMock()
-        await notspam_handler(mock_event)
+        await approve_handler(mock_event)
         mock_event.reply.assert_called()
     
     @pytest.mark.asyncio
-    async def test_notspam_command_handler_invalid_usage(self, test_session, test_config, event_env):
-        """Test /notspam command handler with invalid usage"""
+    async def test_approve_command_handler_invalid_usage(self, test_session, test_config, event_env):
+        """Test /approve command handler with invalid usage"""
         bot, _ = event_env
-        notspam_handler = bot._handlers["notspam_command_handler"]
+        approve_handler = bot._handlers["approve_command_handler"]
         # Create mock event with missing user identifier
         mock_event = MagicMock()
         mock_event.sender_id = test_config.admin_id
         mock_event.chat_id = test_config.tracking_chat_ids[0]
-        mock_event.raw_text = "/notspam"  # Missing user identifier
+        mock_event.raw_text = "/approve"  # Missing user identifier
         mock_event.reply = AsyncMock()
-        await notspam_handler(mock_event)
+        await approve_handler(mock_event)
         mock_event.reply.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_unapprove_command_handler_admin_removes_approval(self, test_session, test_config, event_env):
+        """Test /unapprove command handler when admin removes user approval"""
+        bot, mock_client = event_env
+        unapprove_handler = bot._handlers["unapprove_command_handler"]
+
+        # Create an approved user to remove approval from
+        approved_user = ApprovedUser(
+            user_id=88888,
+            chat_id=test_config.tracking_chat_ids[0]
+        )
+        test_session.add(approved_user)
+        test_session.commit()
+
+        # Prepare event
+        mock_event = MagicMock()
+        mock_event.sender_id = test_config.admin_id
+        mock_event.chat_id = test_config.tracking_chat_ids[0]
+        mock_event.raw_text = "/unapprove 88888"
+        mock_event.reply = AsyncMock()
+
+        # Client.get_entity should resolve the user for nicer messaging
+        mock_client.get_entity = AsyncMock(return_value=MagicMock(id=88888, username="testuser", first_name="Test User"))
+
+        # Run
+        await unapprove_handler(mock_event)
+
+        # Assert: user removed from approved list
+        from db import ApprovedUser as AU
+        assert test_session.query(AU).filter_by(user_id=88888, chat_id=test_config.tracking_chat_ids[0]).first() is None
+        mock_event.reply.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_unapprove_command_handler_non_admin_rejected(self, test_session, test_config, event_env):
+        """Test /unapprove command handler rejects non-admin users"""
+        bot, _ = event_env
+        unapprove_handler = bot._handlers["unapprove_command_handler"]
+
+        # Create mock event for non-admin user
+        mock_event = MagicMock()
+        mock_event.sender_id = 12345  # Not the admin_id
+        mock_event.chat_id = test_config.tracking_chat_ids[0]
+        mock_event.raw_text = "/unapprove 88888"
+        mock_event.reply = AsyncMock()
+
+        await unapprove_handler(mock_event)
+        mock_event.reply.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_unapprove_command_handler_invalid_usage(self, test_session, test_config, event_env):
+        """Test /unapprove command handler with invalid usage"""
+        bot, _ = event_env
+        unapprove_handler = bot._handlers["unapprove_command_handler"]
+
+        # Create mock event with missing user identifier
+        mock_event = MagicMock()
+        mock_event.sender_id = test_config.admin_id
+        mock_event.chat_id = test_config.tracking_chat_ids[0]
+        mock_event.raw_text = "/unapprove"  # Missing user identifier
+        mock_event.reply = AsyncMock()
+
+        await unapprove_handler(mock_event)
+        mock_event.reply.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_unapprove_command_handler_user_not_approved(self, test_session, test_config, event_env):
+        """Test /unapprove command handler when user is not in approved list"""
+        bot, mock_client = event_env
+        unapprove_handler = bot._handlers["unapprove_command_handler"]
+
+        # Prepare event (user 99999 is not approved)
+        mock_event = MagicMock()
+        mock_event.sender_id = test_config.admin_id
+        mock_event.chat_id = test_config.tracking_chat_ids[0]
+        mock_event.raw_text = "/unapprove 99999"
+        mock_event.reply = AsyncMock()
+
+        # Client.get_entity should resolve the user for nicer messaging
+        mock_client.get_entity = AsyncMock(return_value=MagicMock(id=99999, username="testuser", first_name="Test User"))
+
+        # Run
+        await unapprove_handler(mock_event)
+
+        # Assert: appropriate error message is sent
+        mock_event.reply.assert_called()
+        reply_call_args = mock_event.reply.call_args[0][0]
+        assert "not found in approved list" in reply_call_args
