@@ -12,56 +12,28 @@ from config import Config
 
 class TestBotEventHandlers:
     """Test bot event handlers (chat_action_handler, notspam_command_handler)"""
-    
+
     @pytest.fixture
-    def mock_telegram_client(self):
-        """Create a mock TelegramClient"""
-        client = MagicMock()
-        client.on = MagicMock()
-        return client
-    
-    @pytest.fixture
-    def event_handlers(self, test_session, mock_llm, mock_userbot, test_config, mock_queue_processor):
-        """Create bot and extract event handlers"""
-        with patch('telegram.TelegramClient') as mock_client_class:
+    def event_env(self, test_session, mock_llm, mock_userbot, test_config, mock_queue_processor):
+        """Create a bot with a patched Telethon client and return (bot, client)."""
+        with patch('telegram.TelegramClient') as mock_client_cls:
             mock_client = MagicMock()
-            mock_client_class.return_value = mock_client
-            
-            # Track registered handlers
-            handlers = {}
-            
-            def on_decorator(event_instance):
-                def decorator(handler):
-                    # Store handler by the actual event instance type/pattern
-                    if hasattr(event_instance, 'chats'):
-                        if hasattr(event_instance, 'pattern'):
-                            # NewMessage with pattern
-                            handlers[f"NewMessage_pattern"] = handler
-                        else:
-                            # ChatAction or plain NewMessage
-                            if 'ChatAction' in str(type(event_instance)):
-                                handlers["ChatAction"] = handler
-                            else:
-                                handlers["NewMessage"] = handler
-                    else:
-                        # NewMessage without chats restriction (admin messages)
-                        handlers["AdminMessage"] = handler
-                    return handler
-                return decorator
-            
+            # Provide a minimal .on decorator that just returns the function.
+            def on_decorator(*args, **kwargs):
+                def _wrap(fn):
+                    return fn
+                return _wrap
             mock_client.on = on_decorator
-            
-            # Create the bot to register handlers
-            create_bot(test_session, mock_llm, mock_userbot, test_config, mock_queue_processor)
-            
-            # Return handlers and mock client
-            return handlers, mock_client
+            mock_client_cls.return_value = mock_client
+
+            bot = create_bot(test_session, mock_llm, mock_userbot, test_config, mock_queue_processor)
+            return bot, mock_client
     
     @pytest.mark.asyncio
-    async def test_chat_action_handler_user_joined(self, test_session, test_config, event_handlers):
+    async def test_chat_action_handler_user_joined(self, test_session, test_config, event_env):
         """Test chat_action_handler when user joins"""
-        handlers, mock_client = event_handlers
-        chat_action_handler = handlers.get("ChatAction")
+        bot, _ = event_env
+        chat_action_handler = bot._handlers["chat_action_handler"]
         
         assert chat_action_handler is not None
         
@@ -88,10 +60,10 @@ class TestBotEventHandlers:
         assert new_user.chat_id == test_config.tracking_chat_ids[0]
     
     @pytest.mark.asyncio
-    async def test_chat_action_handler_user_added(self, test_session, test_config, event_handlers):
+    async def test_chat_action_handler_user_added(self, test_session, test_config, event_env):
         """Test chat_action_handler when user is added"""
-        handlers, mock_client = event_handlers
-        chat_action_handler = handlers.get("ChatAction")
+        bot, _ = event_env
+        chat_action_handler = bot._handlers["chat_action_handler"]
         
         assert chat_action_handler is not None
         
@@ -118,10 +90,10 @@ class TestBotEventHandlers:
         assert new_user.chat_id == test_config.tracking_chat_ids[0]
     
     @pytest.mark.asyncio
-    async def test_chat_action_handler_pre_approved_user(self, test_session, test_config, event_handlers):
+    async def test_chat_action_handler_pre_approved_user(self, test_session, test_config, event_env):
         """Test chat_action_handler skips pre-approved users"""
-        handlers, mock_client = event_handlers
-        chat_action_handler = handlers.get("ChatAction")
+        bot, _ = event_env
+        chat_action_handler = bot._handlers["chat_action_handler"]
         
         assert chat_action_handler is not None
         
@@ -154,10 +126,10 @@ class TestBotEventHandlers:
         assert new_user is None
     
     @pytest.mark.asyncio
-    async def test_chat_action_handler_existing_user_updates_join_time(self, test_session, test_config, event_handlers):
+    async def test_chat_action_handler_existing_user_updates_join_time(self, test_session, test_config, event_env):
         """Test chat_action_handler updates join_time for existing users"""
-        handlers, mock_client = event_handlers
-        chat_action_handler = handlers.get("ChatAction")
+        bot, _ = event_env
+        chat_action_handler = bot._handlers["chat_action_handler"]
         
         assert chat_action_handler is not None
         
@@ -190,10 +162,10 @@ class TestBotEventHandlers:
         assert updated_time > old_time
     
     @pytest.mark.asyncio
-    async def test_chat_action_handler_non_tracked_chat(self, test_session, test_config, event_handlers):
+    async def test_chat_action_handler_non_tracked_chat(self, test_session, test_config, event_env):
         """Test chat_action_handler ignores events from non-tracked chats"""
-        handlers, mock_client = event_handlers
-        chat_action_handler = handlers.get("ChatAction")
+        bot, _ = event_env
+        chat_action_handler = bot._handlers["chat_action_handler"]
         
         assert chat_action_handler is not None
         
@@ -214,18 +186,11 @@ class TestBotEventHandlers:
         assert new_user_count == 0
     
     @pytest.mark.asyncio
-    async def test_notspam_command_handler_admin_approves_user(self, test_session, test_config, event_handlers):
+    async def test_notspam_command_handler_admin_approves_user(self, test_session, test_config, event_env):
         """Test /notspam command handler when admin approves user"""
-        handlers, mock_client = event_handlers
-        notspam_handler = None
-        
-        # Find the notspam command handler
-        for event_type, handler in handlers.items():
-            if 'NewMessage' in event_type:
-                # This is a simplified approach - in real test would need to check pattern
-                notspam_handler = handler
-                break
-        
+        bot, mock_client = event_env
+        notspam_handler = bot._handlers["notspam_command_handler"]
+
         # Create a new user to approve
         new_user = NewUser(
             user_id=77777,
@@ -233,52 +198,50 @@ class TestBotEventHandlers:
         )
         test_session.add(new_user)
         test_session.commit()
-        
-        # Create mock event for admin using /notspam command
+
+        # Prepare event
         mock_event = MagicMock()
         mock_event.sender_id = test_config.admin_id
         mock_event.chat_id = test_config.tracking_chat_ids[0]
         mock_event.raw_text = "/notspam 77777"
         mock_event.reply = AsyncMock()
-        
-        # Mock client.get_entity to return user info
-        with patch.object(mock_client, 'get_entity', return_value=MagicMock(id=77777, username="testuser", first_name="Test User")):
-            # Call the handler (this is simplified - actual handler registration is more complex)
-            # await notspam_handler(mock_event)
-            pass  # Handler implementation would be tested here
-        
-        # Note: Full implementation would require more complex mocking of telethon event system
-        # This demonstrates the test structure needed
+
+        # Client.get_entity should resolve the user for nicer messaging
+        mock_client.get_entity = AsyncMock(return_value=MagicMock(id=77777, username="testuser", first_name="Test User"))
+
+        # Run
+        await notspam_handler(mock_event)
+
+        # Assert: user removed from monitoring and added to approved
+        from db import NewUser as NU, ApprovedUser as AU
+        assert test_session.query(NU).filter_by(user_id=77777, chat_id=test_config.tracking_chat_ids[0]).first() is None
+        assert test_session.query(AU).filter_by(user_id=77777, chat_id=test_config.tracking_chat_ids[0]).first() is not None
+        mock_event.reply.assert_called()
     
     @pytest.mark.asyncio
-    async def test_notspam_command_handler_non_admin_rejected(self, test_session, test_config, event_handlers):
+    async def test_notspam_command_handler_non_admin_rejected(self, test_session, test_config, event_env):
         """Test /notspam command handler rejects non-admin users"""
-        handlers, mock_client = event_handlers
-        
+        bot, _ = event_env
+        notspam_handler = bot._handlers["notspam_command_handler"]
         # Create mock event for non-admin user
         mock_event = MagicMock()
         mock_event.sender_id = 12345  # Not the admin_id
         mock_event.chat_id = test_config.tracking_chat_ids[0]
         mock_event.raw_text = "/notspam 77777"
         mock_event.reply = AsyncMock()
-        
-        # The handler would reject this and reply with "Don't touch me, baka!"
-        # In a full implementation, we'd test that mock_event.reply was called with correct message
-        assert mock_event.sender_id != test_config.admin_id
+        await notspam_handler(mock_event)
+        mock_event.reply.assert_called()
     
     @pytest.mark.asyncio
-    async def test_notspam_command_handler_invalid_usage(self, test_session, test_config, event_handlers):
+    async def test_notspam_command_handler_invalid_usage(self, test_session, test_config, event_env):
         """Test /notspam command handler with invalid usage"""
-        handlers, mock_client = event_handlers
-        
+        bot, _ = event_env
+        notspam_handler = bot._handlers["notspam_command_handler"]
         # Create mock event with missing user identifier
         mock_event = MagicMock()
         mock_event.sender_id = test_config.admin_id
         mock_event.chat_id = test_config.tracking_chat_ids[0]
         mock_event.raw_text = "/notspam"  # Missing user identifier
         mock_event.reply = AsyncMock()
-        
-        # The handler would reply with usage instructions
-        # In a full implementation, we'd test that mock_event.reply was called with usage message
-        parts = mock_event.raw_text.split()
-        assert len(parts) < 2  # Would trigger usage message
+        await notspam_handler(mock_event)
+        mock_event.reply.assert_called()

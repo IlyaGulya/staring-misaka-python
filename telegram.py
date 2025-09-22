@@ -379,4 +379,17 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config, queue_proce
             logger.info(f"User {user_id} has been automatically approved after passing spam check")
 
     logger.info("Bot setup complete")
+    # Expose handlers for tests to call directly without poking into Telethon internals.
+    # This is inert in production and simplifies unit/integration tests.
+    client._handlers = {
+        "chat_action_handler": chat_action_handler,
+        "message_handler": message_handler,
+        "notspam_command_handler": notspam_command_handler,
+        "admin_commands_group_handler": admin_commands_group_handler,
+        "admin_reply_handler": admin_reply_handler,
+        # expose helpers used by handlers when convenient to assert on behavior
+        "approve_user": approve_user,
+        "get_user_name": get_user_name,
+        "check_user_approval": check_user_approval,
+    }
     return client

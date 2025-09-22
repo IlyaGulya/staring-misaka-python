@@ -14,7 +14,17 @@ logger = logging.getLogger(__name__)
 
 
 class QueueProcessor:
-    def __init__(self, session: Session, llm: Llm, userbot: UserBot, telegram_client: TelegramClient, config):
+    def __init__(
+        self,
+        session: Session,
+        llm: Llm,
+        userbot: UserBot,
+        telegram_client: TelegramClient,
+        config,
+        *,
+        processing_delay: float = 1.0,
+        max_concurrent_jobs: int = 3,
+    ):
         self.session = session
         self.session_factory = sessionmaker(bind=session.bind)
         self.llm = llm
@@ -22,8 +32,8 @@ class QueueProcessor:
         self.telegram_client = telegram_client
         self.config = config
         self.running = False
-        self.processing_delay = 1.0  # Base delay between processing iterations
-        self.max_concurrent_jobs = 3  # Max concurrent spam checks
+        self.processing_delay = processing_delay  # Base delay between processing iterations
+        self.max_concurrent_jobs = max_concurrent_jobs  # Max concurrent spam checks
         
     def _get_thread_safe_session(self) -> Session:
         """Create a new session for thread-safe database operations"""

@@ -168,3 +168,12 @@ class TestDatabaseBootstrap:
         finally:
             if os.path.exists(db_path):
                 os.unlink(db_path)
+
+    def test_load_database_config_from_env(self, monkeypatch, tmp_path):
+        """Sanity-check that load_database_config reads DB_PATH from env in production."""
+        from config import load_database_config
+        db_file = tmp_path / "env_db.sqlite"
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("DB_PATH", str(db_file))
+        cfg = load_database_config()
+        assert cfg.db_path == str(db_file)

@@ -41,18 +41,8 @@ class TestTelegramIntegration:
         
         # Create bot with queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
-        
-        # Find the message handler
-        message_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'message_handler':
-                    message_handler = func
-                    break
-        
-        # Assert we found the handler
-        assert message_handler is not None, "Could not find message_handler"
+        # Get the handler we attached in create_bot
+        message_handler = bot._handlers["message_handler"]
         
         # Execute the message handler
         await message_handler(mock_telegram_event)
@@ -75,21 +65,12 @@ class TestTelegramIntegration:
         approved_user = ApprovedUser(user_id=12345, chat_id=67890)
         test_session.add(approved_user)
         test_session.commit()
-        
+
         # Create bot with queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
-        
-        # Find and execute the message handler
-        message_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'message_handler':
-                    message_handler = func
-                    break
-        
-        if message_handler:
-            await message_handler(mock_telegram_event)
+
+        message_handler = bot._handlers["message_handler"]
+        await message_handler(mock_telegram_event)
         
         # Verify no message was added to queue
         queue_items = test_session.query(MessageQueue).all()
@@ -102,19 +83,10 @@ class TestTelegramIntegration:
         
         # Create bot with queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
-        
-        # Find and execute the message handler
-        message_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'message_handler':
-                    message_handler = func
-                    break
-        
-        if message_handler:
-            await message_handler(mock_telegram_event)
-        
+
+        message_handler = bot._handlers["message_handler"]
+        await message_handler(mock_telegram_event)
+
         # Verify no message was added to queue
         queue_items = test_session.query(MessageQueue).all()
         assert len(queue_items) == 0
@@ -133,17 +105,8 @@ class TestTelegramIntegration:
         # Create bot WITHOUT queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor=None)
         
-        # Find and execute the message handler
-        message_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'message_handler':
-                    message_handler = func
-                    break
-        
-        if message_handler:
-            await message_handler(mock_telegram_event)
+        message_handler = bot._handlers["message_handler"]
+        await message_handler(mock_telegram_event)
         
         # Verify LLM was called directly
         mock_llm.is_spam.assert_called_once_with("Test spam message")
@@ -173,18 +136,9 @@ class TestTelegramIntegration:
         # Create bot WITHOUT queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor=None)
         
-        # Find and execute the message handler
-        message_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'message_handler':
-                    message_handler = func
-                    break
-        
-        if message_handler:
-            # Should not raise exception - should handle error gracefully
-            await message_handler(mock_telegram_event)
+        message_handler = bot._handlers["message_handler"]
+        # Should not raise exception - should handle error gracefully
+        await message_handler(mock_telegram_event)
         
         # User should still be in NewUser table (error prevented processing)
         remaining_new_users = test_session.query(NewUser).filter_by(user_id=12345, chat_id=67890).all()
@@ -212,17 +166,8 @@ class TestTelegramIntegration:
         # Create bot with queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
         
-        # Find and execute the admin reply handler
-        admin_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'admin_reply_handler':
-                    admin_handler = func
-                    break
-        
-        if admin_handler:
-            await admin_handler(admin_event)
+        admin_handler = bot._handlers["admin_reply_handler"]
+        await admin_handler(admin_event)
         
         # Verify status message was sent
         admin_event.reply.assert_called_once()
@@ -259,17 +204,8 @@ class TestTelegramIntegration:
         # Create bot with queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
         
-        # Find and execute the admin reply handler
-        admin_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'admin_reply_handler':
-                    admin_handler = func
-                    break
-        
-        if admin_handler:
-            await admin_handler(admin_event)
+        admin_handler = bot._handlers["admin_reply_handler"]
+        await admin_handler(admin_event)
         
         # Verify retry message was sent
         admin_event.reply.assert_called_once()
@@ -305,17 +241,8 @@ class TestTelegramIntegration:
         # Create bot with queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
         
-        # Find and execute the admin reply handler
-        admin_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'admin_reply_handler':
-                    admin_handler = func
-                    break
-        
-        if admin_handler:
-            await admin_handler(admin_event)
+        admin_handler = bot._handlers["admin_reply_handler"]
+        await admin_handler(admin_event)
         
         # Verify clear message was sent
         admin_event.reply.assert_called_once()
@@ -338,17 +265,8 @@ class TestTelegramIntegration:
         # Create bot with queue processor
         bot = create_bot(test_session, mock_llm, mock_userbot, test_config, queue_processor_with_integration)
         
-        # Find and execute the admin reply handler
-        admin_handler = None
-        for handler_tuple in bot._event_builders:
-            if len(handler_tuple) == 2:
-                event_obj, func = handler_tuple
-                if func.__name__ == 'admin_reply_handler':
-                    admin_handler = func
-                    break
-        
-        if admin_handler:
-            await admin_handler(non_admin_event)
+        admin_handler = bot._handlers["admin_reply_handler"]
+        await admin_handler(non_admin_event)
         
         # Should not be called for non-admin (handler should filter by sender)
         # This tests that the handler properly checks sender_id

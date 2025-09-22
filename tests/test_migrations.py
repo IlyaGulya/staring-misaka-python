@@ -171,8 +171,43 @@ class TestDatabaseMigrations:
                 'new_users',
                 'pending_ban_requests'
             ]
-            
+
             assert set(tables) == set(expected_tables)
+
+    def test_indexes_and_constraints_exist(self, alembic_config, temp_db):
+        """Verify key indexes and unique constraints are present after migrations."""
+        command.upgrade(alembic_config, "head")
+        engine = create_engine(f"sqlite:///{temp_db}")
+        with engine.connect() as conn:
+            # message_queue indexes & unique constraint
+            msg_ix = conn.execute(text("PRAGMA index_list('message_queue')")).fetchall()
+            msg_ix_names = {row[1] for row in msg_ix}  # row[1] = name
+            assert "ix_message_queue_status_nextretry_created" in msg_ix_names
+            assert "ix_message_queue_status_processed_at" in msg_ix_names
+            assert "ix_message_queue_user_chat" in msg_ix_names
+            # SQLite creates auto-indexes for unique constraints
+            unique_indexes = [r for r in msg_ix if r[2] == 1]  # row[2] = unique flag
+            assert len(unique_indexes) >= 1, "Should have at least one unique constraint index"
+
+            # approved_users composite idx + unique
+            appr_ix = conn.execute(text("PRAGMA index_list('approved_users')")).fetchall()
+            appr_ix_names = {row[1] for row in appr_ix}
+            assert "ix_approved_users_user_chat" in appr_ix_names
+            unique_appr = [r for r in appr_ix if r[2] == 1]
+            assert len(unique_appr) >= 1, "Should have unique constraint index"
+
+            # new_users composite idx + unique
+            nu_ix = conn.execute(text("PRAGMA index_list('new_users')")).fetchall()
+            nu_ix_names = {row[1] for row in nu_ix}
+            assert "ix_new_users_user_chat" in nu_ix_names
+            unique_nu = [r for r in nu_ix if r[2] == 1]
+            assert len(unique_nu) >= 1, "Should have unique constraint index"
+
+            # banned_users helper indexes
+            bu_ix = conn.execute(text("PRAGMA index_list('banned_users')")).fetchall()
+            bu_ix_names = {row[1] for row in bu_ix}
+            assert "ix_banned_users_user_id" in bu_ix_names
+            assert "ix_banned_users_user_chat" in bu_ix_names
 
     def test_admin_settings_table_structure(self, alembic_config, temp_db):
         """Test that the AdminSettings table has the correct structure."""
