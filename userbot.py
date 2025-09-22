@@ -11,8 +11,8 @@ class UserBot:
         self.client = TelegramClient(config.userbot_session_path, config.api_id, config.api_hash)
         logger.info("UserBot client initialized")
 
-    def start(self):
-        self.client.start()
+    async def start(self):
+        await self.client.start()
         logger.info("UserBot started")
 
     async def stop(self):
