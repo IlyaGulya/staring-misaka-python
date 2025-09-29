@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Dict
 from pathlib import Path
 from pydantic import Field, field_validator, ConfigDict
 from pydantic_settings import BaseSettings
@@ -28,6 +28,8 @@ class TelegramConfig(BaseConfig):
     bot_token: str
     admin_id: int
     tracking_chat_ids: List[int] = Field(alias="TRACKING_CHAT_IDS")
+    log_channel_map: Dict[int, int] = Field(default_factory=dict, alias="LOG_CHANNEL_MAP")
+    default_purge_count: int = Field(default=25, alias="DEFAULT_PURGE_COUNT")
     
     @field_validator('api_id')
     @classmethod
@@ -78,6 +80,37 @@ class TelegramConfig(BaseConfig):
                 raise ValueError("TRACKING_CHAT_IDS cannot contain zero")
         return v
 
+    @field_validator('log_channel_map', mode='before')
+    @classmethod
+    def parse_log_channel_map(cls, v):
+        """
+        Accept formats:
+          - dict: {group_id: log_chat_id}
+          - string: "-100111:-100222,-100333:-100444"
+        """
+        if v is None or v == "":
+            return {}
+        if isinstance(v, dict):
+            # ensure ints
+            return {int(k): int(vv) for k, vv in v.items()}
+        if isinstance(v, str):
+            pairs = [p.strip() for p in v.split(",") if p.strip()]
+            out = {}
+            for p in pairs:
+                if ":" not in p:
+                    raise ValueError(f"Invalid LOG_CHANNEL_MAP pair: {p}")
+                k, vv = p.split(":", 1)
+                out[int(k.strip())] = int(vv.strip())
+            return out
+        raise ValueError("LOG_CHANNEL_MAP must be a dict or 'group:log,group2:log2' string")
+
+    @field_validator('default_purge_count')
+    @classmethod
+    def validate_default_purge_count(cls, v):
+        if v <= 0:
+            raise ValueError("DEFAULT_PURGE_COUNT must be positive")
+        return v
+
 
 class SessionConfig(BaseConfig):
     """Session file paths configuration"""
@@ -108,6 +141,8 @@ class Config(BaseConfig):
     bot_token: str
     admin_id: int
     tracking_chat_ids: List[int] = Field(alias="TRACKING_CHAT_IDS")
+    log_channel_map: Dict[int, int] = Field(default_factory=dict, alias="LOG_CHANNEL_MAP")
+    default_purge_count: int = Field(default=25, alias="DEFAULT_PURGE_COUNT")
     
     # Session file paths
     bot_session_path: str
@@ -167,7 +202,32 @@ class Config(BaseConfig):
             if chat_id == 0:
                 raise ValueError("TRACKING_CHAT_IDS cannot contain zero")
         return v
-    
+
+    @field_validator('log_channel_map', mode='before')
+    @classmethod
+    def parse_log_channel_map(cls, v):
+        if v is None or v == "":
+            return {}
+        if isinstance(v, dict):
+            return {int(k): int(vv) for k, vv in v.items()}
+        if isinstance(v, str):
+            pairs = [p.strip() for p in v.split(",") if p.strip()]
+            out = {}
+            for p in pairs:
+                if ":" not in p:
+                    raise ValueError(f"Invalid LOG_CHANNEL_MAP pair: {p}")
+                k, vv = p.split(":", 1)
+                out[int(k.strip())] = int(vv.strip())
+            return out
+        raise ValueError("LOG_CHANNEL_MAP must be a dict or 'group:log,group2:log2' string")
+
+    @field_validator('default_purge_count')
+    @classmethod
+    def validate_default_purge_count(cls, v):
+        if v <= 0:
+            raise ValueError("DEFAULT_PURGE_COUNT must be positive")
+        return v
+
     @field_validator('anthropic_api_key')
     @classmethod
     def validate_anthropic_api_key(cls, v):
@@ -197,6 +257,8 @@ class Config(BaseConfig):
             'userbot_session_path': '/tmp/test_userbot.session',
             'db_path': '/tmp/test.db',
             'anthropic_api_key': 'test_key_1234567890',
+            'log_channel_map': {},
+            'default_purge_count': 25,
         }
         
         # Apply overrides
@@ -219,6 +281,8 @@ class Config(BaseConfig):
             userbot_session_path: str
             db_path: str
             anthropic_api_key: str
+            log_channel_map: Dict[int, int] = {}
+            default_purge_count: int = 25
             
             # Copy all validators
             @field_validator('api_id')

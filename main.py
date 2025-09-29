@@ -5,7 +5,6 @@ from config import load_config
 from db import create_session
 from llm import create_llm
 from telegram import create_bot
-from userbot import create_userbot
 from queue_processor import QueueProcessor
 
 
@@ -24,19 +23,14 @@ async def main():
         # Initialize components with configuration
         session = create_session(config)
         llm = create_llm(config)
-        userbot = create_userbot(config)
-        
-        # Start userbot first
-        await userbot.start()
-        logger.info("Userbot started")
-        
+
         # Create and start bot
-        bot = create_bot(session, llm, userbot, config)
+        bot = create_bot(session, llm, config)
         await bot.start(bot_token=config.bot_token)
         logger.info("Telegram bot started")
 
-        # Create queue processor
-        queue_processor = QueueProcessor(session, llm, userbot, bot, config)
+        # Create queue processor (now uses the bot client directly)
+        queue_processor = QueueProcessor(session, llm, bot, config)
 
         # Set queue processor reference on bot
         bot.queue_processor = queue_processor
@@ -58,7 +52,6 @@ async def main():
             logger.info("Shutting down...")
             queue_processor.stop()
             await bot.disconnect()
-            await userbot.disconnect()
             return 0
             
     except Exception as e:

@@ -5,10 +5,11 @@ from typing import Optional
 
 from sqlalchemy.orm import Session, sessionmaker
 from telethon import TelegramClient
+from telethon.tl.functions.channels import EditBannedRequest
+from telethon.tl.types import ChatBannedRights
 
 from db import MessageQueue, NewUser, PendingBanRequest, AdminSettings, ApprovedUser, BannedUser
 from llm import Llm
-from userbot import UserBot
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,6 @@ class QueueProcessor:
         self,
         session: Session,
         llm: Llm,
-        userbot: UserBot,
         telegram_client: TelegramClient,
         config,
         *,
@@ -28,12 +28,21 @@ class QueueProcessor:
         self.session = session
         self.session_factory = sessionmaker(bind=session.bind)
         self.llm = llm
-        self.userbot = userbot
         self.telegram_client = telegram_client
         self.config = config
         self.running = False
         self.processing_delay = processing_delay  # Base delay between processing iterations
         self.max_concurrent_jobs = max_concurrent_jobs  # Max concurrent spam checks
+
+    def _log_dest(self, chat_id: int) -> int:
+        """Resolve log channel for a group, fallback to admin_id."""
+        return self.config.log_channel_map.get(chat_id, self.config.admin_id)
+
+    async def _log(self, chat_id: int, text: str):
+        try:
+            await self.telegram_client.send_message(self._log_dest(chat_id), text)
+        except Exception as e:
+            logger.warning(f"Failed to log action for chat {chat_id}: {e}")
         
     def _get_thread_safe_session(self) -> Session:
         """Create a new session for thread-safe database operations"""
@@ -191,10 +200,11 @@ class QueueProcessor:
             
         if is_spam:
             admin_settings = session.query(AdminSettings).first()
-            
+
             if admin_settings.require_approval:
                 # Notify admin
                 await self._notify_admin(queue_item, session)
+                await self._log(queue_item.chat_id, f"🚩 Potential spam by `{queue_item.user_id}` queued for admin review.")
             else:
                 # Automatically ban the user
                 await self._process_ban(
@@ -208,6 +218,7 @@ class QueueProcessor:
         else:
             # If not spam, approve the user
             await self._auto_approve_user(queue_item.user_id, queue_item.chat_id, session)
+            await self._log(queue_item.chat_id, f"✅ User `{queue_item.user_id}` auto-approved (message passed spam check).")
             
     async def _notify_admin(self, queue_item: MessageQueue, session: Session = None):
         logger.info(f"Notifying admin about potential spam from user {queue_item.user_id}")
@@ -245,9 +256,12 @@ class QueueProcessor:
         logger.info(f"{'Automatically banning' if is_automatic else 'Admin approved ban for'} user {user_id}")
 
         try:
-            # Send the ban command
-            reason = f"autoban by staring misaka. message: {message_text}"
-            await self.userbot.send_ban_command(chat_id, message_id, reason)
+            # Ban via bot admin rights
+            await self._ban_user_via_bot(chat_id, user_id)
+
+            # Purge recent messages from the user
+            purge_n = self.config.default_purge_count
+            await self._purge_user_messages(chat_id, user_id, purge_n)
 
             # Store the ban information in the database
             user_name = await self._get_user_name(user_id)
@@ -275,10 +289,43 @@ class QueueProcessor:
                 f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
             )
             await self.telegram_client.send_message(self.config.admin_id, admin_message)
-            
+            await self._log(chat_id, f"🔨 Banned `{user_id}` and purged last {self.config.default_purge_count} messages.")
+
         except Exception as e:
             logger.error(f"Error processing ban for user {user_id}: {str(e)}")
             raise
+
+    async def _ban_user_via_bot(self, chat_id: int, user_id: int):
+        """Apply ban using bot's admin rights."""
+        rights = ChatBannedRights(
+            until_date=None,
+            view_messages=True,
+            send_messages=True,
+            send_media=True,
+            send_stickers=True,
+            send_gifs=True,
+            send_games=True,
+            send_inline=True,
+            embed_links=True,
+        )
+        try:
+            await self.telegram_client(EditBannedRequest(chat_id, user_id, rights))
+        except Exception as e:
+            # Fallback kick if not a megagroup
+            try:
+                await self.telegram_client.kick_participant(chat_id, user_id)
+            except Exception:
+                raise e
+
+    async def _purge_user_messages(self, chat_id: int, user_id: int, count: int):
+        """Delete recent N messages from the user in the chat."""
+        try:
+            msgs = await self.telegram_client.get_messages(chat_id, from_user=user_id, limit=count)
+            ids = [m.id for m in msgs]
+            if ids:
+                await self.telegram_client.delete_messages(chat_id, ids, revoke=True)
+        except Exception as e:
+            logger.warning(f"Failed to purge messages for user {user_id} in {chat_id}: {e}")
             
     async def _auto_approve_user(self, user_id: int, chat_id: int, session: Session = None):
         logger.info(f"Auto-approving user {user_id} in chat {chat_id}")
@@ -341,7 +388,12 @@ class QueueProcessor:
         
         self.session.add(queue_item)
         self.session.commit()
-        
+        # Fire-and-forget: attempt to log, but don't block
+        try:
+            asyncio.create_task(self._log(chat_id, f"🧾 Queued message `{message_id}` from `{user_id}` for spam checks."))
+        except Exception:
+            pass
+
         logger.info(f"Added message to queue with ID: {queue_item.id}")
         return queue_item
         

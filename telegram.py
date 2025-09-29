@@ -5,21 +5,31 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from telethon import TelegramClient, events
 from telethon.tl.types import UpdateChannelParticipant
+from telethon.tl.functions.channels import EditBannedRequest
+from telethon.tl.types import ChatBannedRights
 
 from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue
 from llm import Llm
-from userbot import UserBot
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
-def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> TelegramClient:
+def create_bot(session: Session, llm: Llm, config) -> TelegramClient:
     client = TelegramClient(config.bot_session_path, config.api_id, config.api_hash)
     logger.info("Creating Telegram bot client")
 
     # Initialize queue processor reference (will be set later)
     client.queue_processor = None
+
+    def _log_dest(chat_id: int) -> int:
+        return config.log_channel_map.get(chat_id, config.admin_id)
+
+    async def _log(chat_id: int, text: str):
+        try:
+            await client.send_message(_log_dest(chat_id), text)
+        except Exception as e:
+            logger.warning(f"Failed to log action for chat {chat_id}: {e}")
 
     @client.on(events.ChatAction(chats=config.tracking_chat_ids))
     async def chat_action_handler(event):
@@ -52,6 +62,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
             try:
                 session.commit()
                 logger.info(f"Successfully updated/added user {user_id} in NewUser table")
+                await _log(event.chat_id, f"👋 New user `{user_id}` joined; added to monitoring.")
             except SQLAlchemyError as e:
                 logger.error(f"Error updating/adding user {user_id} to NewUser table: {str(e)}")
                 session.rollback()
@@ -86,6 +97,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
                     message_text=message_text
                 )
                 logger.info(f"Added message from user {sender.id} to processing queue")
+                await _log(event.chat_id, f"✉️ Message `{event.id}` from `{sender.id}` enqueued for spam checks.")
             else:
                 logger.warning("Queue processor not available, falling back to direct spam check")
                 # Fallback to direct spam check if queue processor is not available
@@ -101,13 +113,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
                             await notify_admin(sender, message_text, event)
                         else:
                             # Automatically ban the user
-                            await process_ban(
-                                user_id=sender.id,
-                                chat_id=event.chat_id,
-                                message_id=event.id,
-                                message_text=message_text,
-                                is_automatic=True
-                            )
+                            await process_ban(sender.id, event.chat_id, event.id, message_text, is_automatic=True)
                     else:
                         # If not spam, check if user should be approved
                         await check_user_approval(sender.id, event.chat_id)
@@ -115,6 +121,54 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
                     logger.error(f"Error in fallback spam check for user {sender.id}: {str(e)}")
         else:
             logger.info(f"Message from existing user {sender.id}, ignoring")
+
+    # === Rose-like ban command (/sban) directly from the bot ===
+    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/(sban|ban)(?:\s+(.+))?'))
+    async def sban_command_handler(event):
+        # Only admin allowed
+        if event.sender_id != config.admin_id:
+            await event.reply("Don't touch me, baka!")
+            return
+        # Resolve target & N
+        args = (event.pattern_match.group(2) or "").strip()
+        n = None
+        target = None
+        if event.is_reply and not args:
+            # reply mode; optional "/sban 15"
+            reply = await event.get_reply_message()
+            target = (await reply.get_sender()).id
+            # message like "/sban 15"
+            parts = event.raw_text.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                n = int(parts[1])
+        else:
+            # "/sban <user_or_id> [N]"
+            parts = args.split()
+            if not parts:
+                await event.reply("Usage: reply `/sban [N]` or `/sban <@username|user_id> [N]`")
+                return
+            ident = parts[0]
+            if len(parts) >= 2 and parts[1].isdigit():
+                n = int(parts[1])
+            try:
+                if ident.startswith("@"):
+                    target = (await client.get_entity(ident[1:])).id
+                else:
+                    target = (await client.get_entity(int(ident))).id
+            except Exception:
+                await event.reply("Couldn't resolve user. Provide @username or numeric ID, or reply to a message.")
+                return
+        if n is None:
+            n = config.default_purge_count
+        # Execute ban + purge
+        try:
+            await _ban_user_via_bot(event.chat_id, target)
+            await _purge_user_messages(event.chat_id, target, n)
+            await event.reply(f"Banned `{target}` and purged last {n} messages.")
+            await _log(event.chat_id, f"🔨 `/sban` by admin. Banned `{target}`; purged {n} messages.")
+        except Exception as e:
+            await event.reply(f"Ban/purge failed: {e}")
+            await _log(event.chat_id, f"⚠️ `/sban` failed for `{target}`: {e}")
 
     @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/approve'))
     async def approve_command_handler(event):
@@ -198,9 +252,9 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
     async def process_ban(user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool):
         logger.info(f"{'Automatically banning' if is_automatic else 'Admin approved ban for'} user {user_id}")
 
-        # Send the ban command
-        reason = f"autoban by staring misaka. message: {message_text}"
-        await userbot.send_ban_command(chat_id, message_id, reason)
+        # Ban with bot and purge messages (Rose-like)
+        await _ban_user_via_bot(chat_id, user_id)
+        await _purge_user_messages(chat_id, user_id, config.default_purge_count)
 
         # Store the ban information in the database
         banned_user = BannedUser(
@@ -226,6 +280,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
             f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
         )
         await client.send_message(config.admin_id, admin_message)
+        await _log(chat_id, f"🔨 Banned `{user_id}` and purged last {config.default_purge_count} messages.")
 
         return banned_user
 
@@ -290,6 +345,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
                         message_text=pending_request.message_text,
                         is_automatic=False
                     )
+                    await _log(pending_request.original_chat_id, f"🔨 Admin approved ban for `{pending_request.sender_id}`.")
 
                     # Remove the pending request from the database
                     session.delete(pending_request)
@@ -442,6 +498,33 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
                 logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
             return f"User_{user_id}"
 
+    async def _ban_user_via_bot(chat_id: int, user_id: int):
+        rights = ChatBannedRights(
+            until_date=None,
+            view_messages=True,
+            send_messages=True,
+            send_media=True,
+            send_stickers=True,
+            send_gifs=True,
+            send_games=True,
+            send_inline=True,
+            embed_links=True,
+        )
+        try:
+            await client(EditBannedRequest(chat_id, user_id, rights))
+        except Exception as e:
+            # Fallback for basic groups
+            try:
+                await client.kick_participant(chat_id, user_id)
+            except Exception:
+                raise e
+
+    async def _purge_user_messages(chat_id: int, user_id: int, count: int):
+        msgs = await client.get_messages(chat_id, from_user=user_id, limit=count)
+        ids = [m.id for m in msgs]
+        if ids:
+            await client.delete_messages(chat_id, ids, revoke=True)
+
     async def check_user_approval(user_id: int, chat_id: int):
         # Auto-approve users who pass spam checks by removing from monitoring and adding to approved list
         new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
@@ -459,6 +542,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
             
             session.commit()
             logger.info(f"User {user_id} has been automatically approved after passing spam check")
+            await _log(chat_id, f"✅ Auto-approved `{user_id}` after passing spam check.")
 
     logger.info("Bot setup complete")
     # Expose handlers for tests to call directly without poking into Telethon internals.
@@ -466,11 +550,14 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
     client._handlers = {
         "chat_action_handler": chat_action_handler,
         "message_handler": message_handler,
+        "sban_command_handler": sban_command_handler,
         "approve_command_handler": approve_command_handler,
         "unapprove_command_handler": unapprove_command_handler,
         "admin_commands_group_handler": admin_commands_group_handler,
         "admin_reply_handler": admin_reply_handler,
         # expose helpers used by handlers when convenient to assert on behavior
+        "_ban_user_via_bot": _ban_user_via_bot,
+        "_purge_user_messages": _purge_user_messages,
         "approve_user": approve_user,
         "remove_approval": remove_approval,
         "get_user_name": get_user_name,
