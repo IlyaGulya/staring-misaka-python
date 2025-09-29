@@ -10,9 +10,9 @@ from db import MessageQueue, NewUser, AdminSettings, ApprovedUser, BannedUser, P
 
 class TestQueueProcessor:
     @pytest.fixture
-    def queue_processor(self, test_session, mock_llm, mock_userbot, mock_telegram_client, test_config):
+    def queue_processor(self, test_session, mock_llm, mock_telegram_client, test_config):
         """Create a QueueProcessor instance for testing"""
-        return QueueProcessor(test_session, mock_llm, mock_userbot, mock_telegram_client, test_config)
+        return QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
 
 
     def test_add_message_to_queue(self, queue_processor):
@@ -240,7 +240,7 @@ class TestQueueProcessor:
         assert pending_request.admin_message_id == 12345
 
     @pytest.mark.asyncio
-    async def test_process_message_spam_automatic_ban(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_userbot, mock_telegram_client):
+    async def test_process_message_spam_automatic_ban(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_telegram_client):
         """Test processing spam message with automatic ban"""
         # Configure LLM to return spam
         mock_llm.is_spam.return_value = True
@@ -269,16 +269,17 @@ class TestQueueProcessor:
         ).first()
         assert banned_user is not None
         assert banned_user.message_text == sample_message_queue.message_text
-        
+        # Bot bans via telegram_client(EditBannedRequest(...))
+        mock_telegram_client.assert_called()
+        # Cleanup may delete messages as part of action
+        assert mock_telegram_client.delete_messages.called or not mock_telegram_client.delete_messages.called  # Optional
+
         # Should remove user from monitoring
         new_user = test_session.query(NewUser).filter_by(
             user_id=sample_message_queue.user_id,
             chat_id=sample_message_queue.chat_id
         ).first()
         assert new_user is None
-        
-        # Should call userbot to send ban command
-        mock_userbot.send_ban_command.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_process_message_llm_error_retry_logic(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm):

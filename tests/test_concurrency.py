@@ -68,15 +68,13 @@ class TestQueueProcessorConcurrency:
         mock_llm1.is_spam.return_value = False
         mock_llm2 = AsyncMock()
         mock_llm2.is_spam.return_value = False
-        
-        mock_userbot1 = AsyncMock()
-        mock_userbot2 = AsyncMock()
+
         mock_telegram_client1 = AsyncMock()
         mock_telegram_client2 = AsyncMock()
-        
+
         # Create two processors
-        processor1 = QueueProcessor(session1, mock_llm1, mock_userbot1, mock_telegram_client1, shared_db_config, processing_delay=0.02)
-        processor2 = QueueProcessor(session2, mock_llm2, mock_userbot2, mock_telegram_client2, shared_db_config, processing_delay=0.02)
+        processor1 = QueueProcessor(session1, mock_llm1, mock_telegram_client1, shared_db_config, processing_delay=0.02)
+        processor2 = QueueProcessor(session2, mock_llm2, mock_telegram_client2, shared_db_config, processing_delay=0.02)
         
         processed_messages_1 = []
         processed_messages_2 = []
@@ -129,10 +127,9 @@ class TestQueueProcessorConcurrency:
         # Mock dependencies
         mock_llm = AsyncMock()
         mock_llm.is_spam.return_value = False
-        mock_userbot = AsyncMock()
         mock_telegram_client = AsyncMock()
-        
-        processor = QueueProcessor(session, mock_llm, mock_userbot, mock_telegram_client, shared_db_config, processing_delay=0.01)
+
+        processor = QueueProcessor(session, mock_llm, mock_telegram_client, shared_db_config, processing_delay=0.01)
         
         # Add initial NewUser for message processing
         new_user = NewUser(user_id=5000, chat_id=shared_db_config.tracking_chat_ids[0])
@@ -214,13 +211,11 @@ class TestQueueProcessorConcurrency:
         # Mock dependencies for processors
         mock_llm1 = AsyncMock()
         mock_llm2 = AsyncMock()
-        mock_userbot1 = AsyncMock()
-        mock_userbot2 = AsyncMock()
         mock_telegram_client1 = AsyncMock()
         mock_telegram_client2 = AsyncMock()
-        
-        processor1 = QueueProcessor(session1, mock_llm1, mock_userbot1, mock_telegram_client1, shared_db_config, processing_delay=0.01)
-        processor2 = QueueProcessor(session2, mock_llm2, mock_userbot2, mock_telegram_client2, shared_db_config, processing_delay=0.01)
+
+        processor1 = QueueProcessor(session1, mock_llm1, mock_telegram_client1, shared_db_config, processing_delay=0.01)
+        processor2 = QueueProcessor(session2, mock_llm2, mock_telegram_client2, shared_db_config, processing_delay=0.01)
         
         # Perform concurrent retry operations
         async def concurrent_retries():
@@ -280,12 +275,11 @@ class TestQueueProcessorConcurrency:
         async def slow_spam_check(message):
             await asyncio.sleep(0.2)  # Simulate slow processing
             return False
-        
+
         mock_llm.is_spam.side_effect = slow_spam_check
-        mock_userbot = AsyncMock()
         mock_telegram_client = AsyncMock()
-        
-        processor = QueueProcessor(session, mock_llm, mock_userbot, mock_telegram_client, shared_db_config, processing_delay=0.01)
+
+        processor = QueueProcessor(session, mock_llm, mock_telegram_client, shared_db_config, processing_delay=0.01)
         
         # Start processor
         task = asyncio.create_task(processor.start())

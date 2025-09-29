@@ -27,12 +27,12 @@ class TestTelegramIntegration:
         return event
 
     @pytest.fixture
-    def queue_processor_with_integration(self, test_session, mock_llm, mock_userbot, mock_telegram_client, test_config):
+    def queue_processor_with_integration(self, test_session, mock_llm, mock_telegram_client, test_config):
         """Create a QueueProcessor for integration testing"""
-        return QueueProcessor(test_session, mock_llm, mock_userbot, mock_telegram_client, test_config)
+        return QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
 
     @pytest.mark.asyncio
-    async def test_message_handler_adds_to_queue(self, test_session, mock_llm, mock_userbot, mock_telegram_event, queue_processor_with_integration, test_config):
+    async def test_message_handler_adds_to_queue(self, test_session, mock_llm, mock_telegram_event, queue_processor_with_integration, test_config):
         """Test that message handler adds messages to queue instead of direct processing"""
         # Create a new user to be monitored
         new_user = NewUser(user_id=12345, chat_id=67890)
@@ -40,7 +40,7 @@ class TestTelegramIntegration:
         test_session.commit()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         bot.queue_processor = queue_processor_with_integration
         # Get the handler we attached in create_bot
         message_handler = bot._handlers["message_handler"]
@@ -60,7 +60,7 @@ class TestTelegramIntegration:
         assert queue_item.status == 'pending'
 
     @pytest.mark.asyncio
-    async def test_message_handler_ignores_approved_user(self, test_session, mock_llm, mock_userbot, mock_telegram_event, queue_processor_with_integration, test_config):
+    async def test_message_handler_ignores_approved_user(self, test_session, mock_llm, mock_telegram_event, queue_processor_with_integration, test_config):
         """Test that message handler ignores pre-approved users"""
         # Create an approved user
         approved_user = ApprovedUser(user_id=12345, chat_id=67890)
@@ -68,7 +68,7 @@ class TestTelegramIntegration:
         test_session.commit()
 
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         bot.queue_processor = queue_processor_with_integration
 
         message_handler = bot._handlers["message_handler"]
@@ -79,12 +79,12 @@ class TestTelegramIntegration:
         assert len(queue_items) == 0
 
     @pytest.mark.asyncio
-    async def test_message_handler_ignores_existing_user(self, test_session, mock_llm, mock_userbot, mock_telegram_event, queue_processor_with_integration, test_config):
+    async def test_message_handler_ignores_existing_user(self, test_session, mock_llm, mock_telegram_event, queue_processor_with_integration, test_config):
         """Test that message handler ignores messages from existing users (not in NewUser table)"""
         # Don't create a NewUser entry - user is not being monitored
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         bot.queue_processor = queue_processor_with_integration
 
         message_handler = bot._handlers["message_handler"]
@@ -95,7 +95,7 @@ class TestTelegramIntegration:
         assert len(queue_items) == 0
 
     @pytest.mark.asyncio
-    async def test_message_handler_fallback_when_no_queue_processor(self, test_session, mock_llm, mock_userbot, mock_telegram_event, test_config):
+    async def test_message_handler_fallback_when_no_queue_processor(self, test_session, mock_llm, mock_telegram_event, test_config):
         """Test that message handler falls back to direct spam check when queue processor is unavailable"""
         # Create a new user to be monitored
         new_user = NewUser(user_id=12345, chat_id=67890)
@@ -106,7 +106,7 @@ class TestTelegramIntegration:
         mock_llm.is_spam = AsyncMock(return_value=False)
         
         # Create bot WITHOUT queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         
         message_handler = bot._handlers["message_handler"]
         await message_handler(mock_telegram_event)
@@ -126,7 +126,7 @@ class TestTelegramIntegration:
         assert len(approved_users) == 1
 
     @pytest.mark.asyncio
-    async def test_message_handler_fallback_error_handling(self, test_session, mock_llm, mock_userbot, mock_telegram_event, test_config):
+    async def test_message_handler_fallback_error_handling(self, test_session, mock_llm, mock_telegram_event, test_config):
         """Test that message handler handles errors gracefully in fallback mode"""
         # Create a new user to be monitored
         new_user = NewUser(user_id=12345, chat_id=67890)
@@ -137,7 +137,7 @@ class TestTelegramIntegration:
         mock_llm.is_spam = AsyncMock(side_effect=Exception("API overloaded"))
         
         # Create bot WITHOUT queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         
         message_handler = bot._handlers["message_handler"]
         # Should not raise exception - should handle error gracefully
@@ -148,7 +148,7 @@ class TestTelegramIntegration:
         assert len(remaining_new_users) == 1
 
     @pytest.mark.asyncio
-    async def test_admin_queue_status_command(self, test_session, mock_llm, mock_userbot, queue_processor_with_integration, test_config):
+    async def test_admin_queue_status_command(self, test_session, mock_llm, queue_processor_with_integration, test_config):
         """Test admin queue status command"""
         # Create some queue items with different statuses
         queue_items = [
@@ -167,7 +167,7 @@ class TestTelegramIntegration:
         admin_event.reply = AsyncMock()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         bot.queue_processor = queue_processor_with_integration
         
         admin_handler = bot._handlers["admin_reply_handler"]
@@ -185,7 +185,7 @@ class TestTelegramIntegration:
         assert "Total: 4" in call_args
 
     @pytest.mark.asyncio
-    async def test_admin_retry_failed_command(self, test_session, mock_llm, mock_userbot, queue_processor_with_integration, test_config):
+    async def test_admin_retry_failed_command(self, test_session, mock_llm, queue_processor_with_integration, test_config):
         """Test admin retry failed messages command"""
         # Create failed messages
         failed_msg1 = MessageQueue(
@@ -206,7 +206,7 @@ class TestTelegramIntegration:
         admin_event.reply = AsyncMock()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         bot.queue_processor = queue_processor_with_integration
         
         admin_handler = bot._handlers["admin_reply_handler"]
@@ -224,7 +224,7 @@ class TestTelegramIntegration:
         assert failed_msg2.status == 'pending'
 
     @pytest.mark.asyncio
-    async def test_admin_clear_completed_command(self, test_session, mock_llm, mock_userbot, queue_processor_with_integration, test_config):
+    async def test_admin_clear_completed_command(self, test_session, mock_llm, queue_processor_with_integration, test_config):
         """Test admin clear completed messages command"""
         # Create completed messages
         from datetime import datetime, timedelta
@@ -244,7 +244,7 @@ class TestTelegramIntegration:
         admin_event.reply = AsyncMock()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         bot.queue_processor = queue_processor_with_integration
         
         admin_handler = bot._handlers["admin_reply_handler"]
@@ -260,7 +260,7 @@ class TestTelegramIntegration:
         assert len(remaining_messages) == 0
 
     @pytest.mark.asyncio
-    async def test_non_admin_queue_command_rejection(self, test_session, mock_llm, mock_userbot, queue_processor_with_integration, test_config):
+    async def test_non_admin_queue_command_rejection(self, test_session, mock_llm, queue_processor_with_integration, test_config):
         """Test that non-admin users cannot use queue commands"""
         # Create mock non-admin event
         non_admin_event = MagicMock()
@@ -269,7 +269,7 @@ class TestTelegramIntegration:
         non_admin_event.reply = AsyncMock()
         
         # Create bot with queue processor
-        bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+        bot = create_bot(test_session, mock_llm, test_config)
         bot.queue_processor = queue_processor_with_integration
         
         admin_handler = bot._handlers["admin_reply_handler"]

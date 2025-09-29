@@ -19,7 +19,9 @@ def test_config():
     
     config = Config.for_testing(
         bot_session_path=bot_session.name,
-        userbot_session_path=userbot_session.name
+        userbot_session_path=userbot_session.name,
+        # New: a default per-group logging channel mapping used by the bot
+        LOG_CHANNEL_MAP=f"{67890}:{67891},{12345}:{12346}"
     )
     
     # Close the temp files so Telethon can use them
@@ -78,19 +80,15 @@ def mock_llm():
 
 
 @pytest.fixture
-def mock_userbot():
-    """Mock userbot for ban commands"""
-    mock = AsyncMock()
-    mock.send_ban_command = AsyncMock()
-    return mock
-
-
-@pytest.fixture
 def mock_telegram_client():
     """Mock Telegram client"""
     mock = AsyncMock()
     mock.send_message = AsyncMock()
     mock.get_entity = AsyncMock()
+    # New methods used by bot-driven moderation:
+    mock.delete_messages = AsyncMock()
+    # Mock __call__ for EditBannedRequest and other TL functions
+    mock.return_value = AsyncMock()
     return mock
 
 
