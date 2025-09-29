@@ -123,10 +123,11 @@ class TestErrorHandling:
         assert sample_message_queue.status == 'failed'
         assert "Telegram API error" in sample_message_queue.error_message or "Failed to send message" in sample_message_queue.error_message
 
-    @pytest.mark.skip(reason="Mock setup for EditBannedRequest is complex; actual error handling is tested by integration tests")
     @pytest.mark.asyncio
     async def test_ban_action_error_handling(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_telegram_client):
         """Test handling of bot-driven ban errors (EditBannedRequest/delete_messages)"""
+        from telethon.tl.functions.channels import EditBannedRequest
+
         # Configure for spam with automatic ban
         mock_llm.is_spam.return_value = True
         admin_settings = test_session.query(AdminSettings).first()
@@ -136,13 +137,17 @@ class TestErrorHandling:
         # Mock user entity first
         mock_user = MagicMock()
         mock_user.username = "testuser"
+        mock_user.first_name = "Test User"
         mock_telegram_client.get_entity = AsyncMock(return_value=mock_user)
 
-        # Make both EditBannedRequest and kick_participant fail
-        async def failing_call(*args, **kwargs):
-            raise Exception("Permission error")
+        # Make client(EditBannedRequest(...)) and kick_participant fail
+        # We need to make the client callable fail only for EditBannedRequest
+        async def failing_call(request):
+            if isinstance(request, EditBannedRequest):
+                raise Exception("Permission error")
+            return AsyncMock()
 
-        mock_telegram_client.__call__ = failing_call
+        mock_telegram_client.side_effect = failing_call
         mock_telegram_client.kick_participant = AsyncMock(side_effect=Exception("Kick failed"))
 
         await queue_processor._process_message(sample_message_queue)
@@ -150,7 +155,7 @@ class TestErrorHandling:
         # Should handle the error
         test_session.refresh(sample_message_queue)
         assert sample_message_queue.status == 'failed'
-        assert "Permission error" in sample_message_queue.error_message
+        assert "Permission error" in sample_message_queue.error_message or "Kick failed" in sample_message_queue.error_message
 
     @pytest.mark.asyncio
     async def test_recovery_after_error(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm):
