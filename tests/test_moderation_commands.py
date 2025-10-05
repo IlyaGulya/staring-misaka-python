@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 from telegram import create_bot
 from db import NewUser
@@ -41,6 +42,8 @@ async def test_ban_command_bans_and_cleans_and_logs(test_session, mock_llm, test
         reply_msg = MagicMock()
         reply_msg.sender_id = target_user_id
         reply_msg.id = 321
+        # sban handler awaits reply.get_sender()
+        reply_msg.get_sender = AsyncMock(return_value=SimpleNamespace(id=target_user_id))
 
         event = MagicMock()
         event.chat_id = group_id
@@ -59,11 +62,12 @@ async def test_ban_command_bans_and_cleans_and_logs(test_session, mock_llm, test
         # Assert cleanup attempted for N messages
         client.delete_messages.assert_awaited()
 
-        # Assert logging went to the mapped channel for this group
+        # Assert logging went to the mapped channel for this group (67891 for group 67890)
         client.send_message.assert_awaited()
-        # The send_message is called with destination and message text
-        calls = [call for call in client.send_message.call_args_list]
-        assert any(str(log_channel_id) in str(call) for call in calls)
+        # Find calls where the destination is the expected log channel
+        log_calls = [call for call in client.send_message.call_args_list
+                     if len(call[0]) > 0 and call[0][0] == log_channel_id]
+        assert len(log_calls) > 0, f"Expected at least one log message to {log_channel_id} (mapped channel for group {group_id}), got calls: {client.send_message.call_args_list}"
 
 
 @pytest.mark.asyncio

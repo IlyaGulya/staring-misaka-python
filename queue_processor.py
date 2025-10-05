@@ -5,11 +5,10 @@ from typing import Optional
 
 from sqlalchemy.orm import Session, sessionmaker
 from telethon import TelegramClient
-from telethon.tl.functions.channels import EditBannedRequest
-from telethon.tl.types import ChatBannedRights
 
 from db import MessageQueue, NewUser, PendingBanRequest, AdminSettings, ApprovedUser, BannedUser
 from llm import Llm
+from moderation import ban_user, purge_user_messages
 
 logger = logging.getLogger(__name__)
 
@@ -297,35 +296,11 @@ class QueueProcessor:
 
     async def _ban_user_via_bot(self, chat_id: int, user_id: int):
         """Apply ban using bot's admin rights."""
-        rights = ChatBannedRights(
-            until_date=None,
-            view_messages=True,
-            send_messages=True,
-            send_media=True,
-            send_stickers=True,
-            send_gifs=True,
-            send_games=True,
-            send_inline=True,
-            embed_links=True,
-        )
-        try:
-            await self.telegram_client(EditBannedRequest(chat_id, user_id, rights))
-        except Exception as e:
-            # Fallback kick if not a megagroup
-            try:
-                await self.telegram_client.kick_participant(chat_id, user_id)
-            except Exception:
-                raise e
+        await ban_user(self.telegram_client, chat_id, user_id)
 
     async def _purge_user_messages(self, chat_id: int, user_id: int, count: int):
         """Delete recent N messages from the user in the chat."""
-        try:
-            msgs = await self.telegram_client.get_messages(chat_id, from_user=user_id, limit=count)
-            ids = [m.id for m in msgs]
-            if ids:
-                await self.telegram_client.delete_messages(chat_id, ids, revoke=True)
-        except Exception as e:
-            logger.warning(f"Failed to purge messages for user {user_id} in {chat_id}: {e}")
+        await purge_user_messages(self.telegram_client, chat_id, user_id, count)
             
     async def _auto_approve_user(self, user_id: int, chat_id: int, session: Session = None):
         logger.info(f"Auto-approving user {user_id} in chat {chat_id}")

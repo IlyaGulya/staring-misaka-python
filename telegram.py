@@ -5,11 +5,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from telethon import TelegramClient, events
 from telethon.tl.types import UpdateChannelParticipant
-from telethon.tl.functions.channels import EditBannedRequest
-from telethon.tl.types import ChatBannedRights
 
 from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue
 from llm import Llm
+from moderation import ban_user, purge_user_messages
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -499,31 +498,10 @@ def create_bot(session: Session, llm: Llm, config) -> TelegramClient:
             return f"User_{user_id}"
 
     async def _ban_user_via_bot(chat_id: int, user_id: int):
-        rights = ChatBannedRights(
-            until_date=None,
-            view_messages=True,
-            send_messages=True,
-            send_media=True,
-            send_stickers=True,
-            send_gifs=True,
-            send_games=True,
-            send_inline=True,
-            embed_links=True,
-        )
-        try:
-            await client(EditBannedRequest(chat_id, user_id, rights))
-        except Exception as e:
-            # Fallback for basic groups
-            try:
-                await client.kick_participant(chat_id, user_id)
-            except Exception:
-                raise e
+        await ban_user(client, chat_id, user_id)
 
     async def _purge_user_messages(chat_id: int, user_id: int, count: int):
-        msgs = await client.get_messages(chat_id, from_user=user_id, limit=count)
-        ids = [m.id for m in msgs]
-        if ids:
-            await client.delete_messages(chat_id, ids, revoke=True)
+        await purge_user_messages(client, chat_id, user_id, count)
 
     async def check_user_approval(user_id: int, chat_id: int):
         # Auto-approve users who pass spam checks by removing from monitoring and adding to approved list
