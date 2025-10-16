@@ -1,13 +1,13 @@
-import pytest
-import tempfile
 import os
-from datetime import datetime
+import tempfile
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.orm import sessionmaker
 
 from config import Config
-from db import Base, MessageQueue, NewUser, AdminSettings, ApprovedUser, BannedUser, PendingBanRequest
+from db import Base, MessageQueue, NewUser, AdminSettings
 
 
 @pytest.fixture

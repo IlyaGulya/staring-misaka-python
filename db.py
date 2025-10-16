@@ -115,6 +115,28 @@ class AdminSettings(Base):
         return f"AdminSettings(id={self.id!r}, require_approval={self.require_approval!r})"
 
 
+class GroupSettings(Base):
+    __tablename__ = 'group_settings'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Performance index for chat lookups
+    __table_args__ = (
+        Index("ix_group_settings_chat_id", "chat_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"GroupSettings(id={self.id!r}, chat_id={self.chat_id!r}, "
+            f"enabled={self.enabled!r}, updated_at={self.updated_at!r})"
+        )
+
+
 class MessageQueue(Base):
     __tablename__ = 'message_queue'
 
@@ -183,5 +205,13 @@ def create_session(config) -> Session:
         admin_settings = AdminSettings(require_approval=False)
         session.add(admin_settings)
         session.commit()
+
+    # Ensure we have GroupSettings entries for all tracked chats (enabled by default)
+    for chat_id in config.tracking_chat_ids:
+        group_settings = session.query(GroupSettings).filter_by(chat_id=chat_id).first()
+        if not group_settings:
+            group_settings = GroupSettings(chat_id=chat_id, enabled=True)
+            session.add(group_settings)
+    session.commit()
 
     return session
