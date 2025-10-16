@@ -32,24 +32,24 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
             user_id = event.user.id
             logger.info(f"User {user_id} was added to the group {event.chat_id}")
 
-            # Check if user is pre-approved
-            approved_user = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
-            if approved_user:
-                logger.info(f"User {user_id} is pre-approved, skipping monitoring")
-                return
-
-            # Check if the user already exists in the new_users table
-            existing_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
-
-            if existing_user:
-                logger.info(f"User {user_id} already exists in NewUser table. Updating join time.")
-                existing_user.join_time = datetime.now(UTC)
-            else:
-                logger.info(f"Adding new user {user_id} to NewUser table")
-                new_user = NewUser(user_id=user_id, chat_id=event.chat_id, join_time=datetime.now(UTC))
-                session.add(new_user)
-
             try:
+                # Check if user is pre-approved
+                approved_user = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
+                if approved_user:
+                    logger.info(f"User {user_id} is pre-approved, skipping monitoring")
+                    return
+
+                # Check if the user already exists in the new_users table
+                existing_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
+
+                if existing_user:
+                    logger.info(f"User {user_id} already exists in NewUser table. Updating join time.")
+                    existing_user.join_time = datetime.now(UTC)
+                else:
+                    logger.info(f"Adding new user {user_id} to NewUser table")
+                    new_user = NewUser(user_id=user_id, chat_id=event.chat_id, join_time=datetime.now(UTC))
+                    session.add(new_user)
+
                 session.commit()
                 logger.info(f"Successfully updated/added user {user_id} in NewUser table")
             except SQLAlchemyError as e:
@@ -64,14 +64,29 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
         sender = await event.get_sender()
         logger.info(f"Message sender: {sender.id}")
 
-        # Check if sender is pre-approved
-        approved_user = session.query(ApprovedUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
-        if approved_user:
-            logger.info(f"Message from pre-approved user {sender.id}, ignoring")
-            return
+        try:
+            # Check if sender is pre-approved
+            approved_user = session.query(ApprovedUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
+            if approved_user:
+                logger.info(f"Message from pre-approved user {sender.id}, ignoring")
+                return
 
-        # Check if sender is in the new_users table
-        new_user = session.query(NewUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
+            # Check if sender is in the new_users table
+            new_user = session.query(NewUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
+        except SQLAlchemyError as e:
+            logger.error(f"Database error when checking user {sender.id}: {str(e)}")
+            session.rollback()
+            # Try again after rollback
+            try:
+                approved_user = session.query(ApprovedUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
+                if approved_user:
+                    logger.info(f"Message from pre-approved user {sender.id}, ignoring")
+                    return
+                new_user = session.query(NewUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
+            except SQLAlchemyError as retry_error:
+                logger.error(f"Database error persists after rollback for user {sender.id}: {str(retry_error)}")
+                session.rollback()
+                return
         if new_user:
             logger.info(f"Processing message from new user {sender.id}")
             message_text = event.raw_text

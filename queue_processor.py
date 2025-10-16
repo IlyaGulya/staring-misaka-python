@@ -318,32 +318,71 @@ class QueueProcessor:
     def add_message_to_queue(self, user_id: int, chat_id: int, message_id: int, message_text: str) -> MessageQueue:
         """Add a message to the processing queue"""
         logger.info(f"Adding message to queue for user {user_id} in chat {chat_id}")
-        
-        # Check if message is already in queue
-        existing = self.session.query(MessageQueue).filter_by(
-            user_id=user_id,
-            chat_id=chat_id,
-            message_id=message_id
-        ).first()
-        
-        if existing:
-            logger.info(f"Message already in queue: {existing.id}")
-            return existing
-            
-        queue_item = MessageQueue(
-            user_id=user_id,
-            chat_id=chat_id,
-            message_id=message_id,
-            message_text=message_text,
-            status='pending',
-            created_at=datetime.now()
-        )
-        
-        self.session.add(queue_item)
-        self.session.commit()
-        
-        logger.info(f"Added message to queue with ID: {queue_item.id}")
-        return queue_item
+
+        try:
+            # Check if message is already in queue
+            existing = self.session.query(MessageQueue).filter_by(
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=message_id
+            ).first()
+
+            if existing:
+                logger.info(f"Message already in queue: {existing.id}")
+                return existing
+
+            queue_item = MessageQueue(
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=message_id,
+                message_text=message_text,
+                status='pending',
+                created_at=datetime.now()
+            )
+
+            self.session.add(queue_item)
+            self.session.commit()
+
+            logger.info(f"Added message to queue with ID: {queue_item.id}")
+            return queue_item
+
+        except Exception as e:
+            logger.error(f"Error adding message to queue for user {user_id}: {str(e)}")
+            self.session.rollback()
+
+            # Try again after rollback
+            try:
+                # Check if it was added despite the error
+                existing = self.session.query(MessageQueue).filter_by(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    message_id=message_id
+                ).first()
+
+                if existing:
+                    logger.info(f"Message found in queue after error: {existing.id}")
+                    return existing
+
+                # Try to add again
+                queue_item = MessageQueue(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    message_text=message_text,
+                    status='pending',
+                    created_at=datetime.now()
+                )
+
+                self.session.add(queue_item)
+                self.session.commit()
+
+                logger.info(f"Successfully added message to queue after retry with ID: {queue_item.id}")
+                return queue_item
+
+            except Exception as retry_error:
+                logger.error(f"Failed to add message to queue after retry: {str(retry_error)}")
+                self.session.rollback()
+                raise
         
     def get_queue_status(self):
         """Get current queue status for admin"""

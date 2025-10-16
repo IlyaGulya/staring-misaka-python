@@ -1,6 +1,6 @@
 import datetime
 
-from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func, UniqueConstraint, Index
+from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func, UniqueConstraint, Index, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 
 
@@ -150,7 +150,28 @@ class MessageQueue(Base):
 
 def create_session(config) -> Session:
     """Create database session with the given configuration"""
-    engine = create_engine(f'sqlite:///{config.db_path}', echo=False)
+    # Configure SQLite for better concurrency with WAL mode and longer timeout
+    engine = create_engine(
+        f'sqlite:///{config.db_path}',
+        echo=False,
+        connect_args={
+            'timeout': 30,  # Wait up to 30 seconds for lock
+            'check_same_thread': False  # Allow multi-threaded access
+        },
+        pool_pre_ping=True,  # Verify connections before using
+        pool_recycle=3600  # Recycle connections after 1 hour
+    )
+
+    # Set up SQLite optimizations for concurrency
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
+        cursor.execute("PRAGMA busy_timeout=30000")  # 30 second timeout in milliseconds
+        cursor.execute("PRAGMA synchronous=NORMAL")  # Balance between safety and performance
+        cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+        cursor.close()
+
     Session = sessionmaker(bind=engine)
     session = Session()
 
