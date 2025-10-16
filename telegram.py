@@ -37,7 +37,20 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
             return
 
         # Check if bot is enabled for this chat
-        if not is_bot_enabled_for_chat(event.chat_id):
+        try:
+            bot_enabled = is_bot_enabled_for_chat(event.chat_id)
+        except SQLAlchemyError as e:
+            logger.error(f"Database error when checking if bot is enabled for chat {event.chat_id}: {str(e)}")
+            session.rollback()
+            # Try again after rollback
+            try:
+                bot_enabled = is_bot_enabled_for_chat(event.chat_id)
+            except SQLAlchemyError as retry_error:
+                logger.error(f"Database error persists after rollback when checking bot enabled status: {str(retry_error)}")
+                session.rollback()
+                return
+
+        if not bot_enabled:
             logger.info(f"Bot is disabled for chat {event.chat_id}, ignoring event")
             return
 
@@ -77,7 +90,20 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
         logger.info(f"New message event received: {event}")
 
         # Check if bot is enabled for this chat
-        if not is_bot_enabled_for_chat(event.chat_id):
+        try:
+            bot_enabled = is_bot_enabled_for_chat(event.chat_id)
+        except SQLAlchemyError as e:
+            logger.error(f"Database error when checking if bot is enabled for chat {event.chat_id}: {str(e)}")
+            session.rollback()
+            # Try again after rollback
+            try:
+                bot_enabled = is_bot_enabled_for_chat(event.chat_id)
+            except SQLAlchemyError as retry_error:
+                logger.error(f"Database error persists after rollback when checking bot enabled status: {str(retry_error)}")
+                session.rollback()
+                return
+
+        if not bot_enabled:
             logger.info(f"Bot is disabled for chat {event.chat_id}, ignoring message")
             return
 
