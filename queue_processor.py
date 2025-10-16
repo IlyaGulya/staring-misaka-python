@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy.orm import Session, sessionmaker
 from telethon import TelegramClient
 
-from db import MessageQueue, NewUser, PendingBanRequest, AdminSettings, ApprovedUser, BannedUser
+from db import MessageQueue, NewUser, PendingBanRequest, AdminSettings, ApprovedUser, BannedUser, GroupSettings
 from llm import Llm
 from userbot import UserBot
 
@@ -117,21 +117,31 @@ class QueueProcessor:
         # Use provided session or fall back to instance session
         if session is None:
             session = self.session
-            
+
         logger.info(f"Processing message queue item {queue_item.id} for user {queue_item.user_id}")
-        
+
         # Mark as processing
         queue_item.status = 'processing'
         queue_item.retry_count += 1
         session.commit()
-        
+
         try:
+            # Check if bot is enabled for this chat
+            group_settings = session.query(GroupSettings).filter_by(chat_id=queue_item.chat_id).first()
+            if group_settings and not group_settings.enabled:
+                logger.info(f"Bot is disabled for chat {queue_item.chat_id}, marking queue item as completed")
+                queue_item.status = 'completed'
+                queue_item.processed_at = datetime.now(UTC)
+                queue_item.error_message = "Bot disabled for this chat"
+                session.commit()
+                return
+
             # Check if user is still being monitored
             new_user = session.query(NewUser).filter_by(
-                user_id=queue_item.user_id, 
+                user_id=queue_item.user_id,
                 chat_id=queue_item.chat_id
             ).first()
-            
+
             if not new_user:
                 logger.info(f"User {queue_item.user_id} no longer being monitored, marking queue item as completed")
                 queue_item.status = 'completed'

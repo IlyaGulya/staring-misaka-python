@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from telethon import TelegramClient, events
 from telethon.tl.types import UpdateChannelParticipant
 
-from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue
+from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue, GroupSettings
 from llm import Llm
 from userbot import UserBot
 
@@ -21,12 +21,26 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
     # Initialize queue processor reference (will be set later)
     client.queue_processor = None
 
+    def is_bot_enabled_for_chat(chat_id: int) -> bool:
+        """Check if bot is enabled for the given chat."""
+        group_settings = session.query(GroupSettings).filter_by(chat_id=chat_id).first()
+        if group_settings:
+            return group_settings.enabled
+        # Default to enabled if no settings exist yet
+        return True
+
     @client.on(events.ChatAction(chats=config.tracking_chat_ids))
     async def chat_action_handler(event):
         logger.info(f"Chat action event received: {event}")
         if event.chat_id not in config.tracking_chat_ids:
             logger.info(f"Ignoring event from non-tracked chat: {event.chat_id}")
             return
+
+        # Check if bot is enabled for this chat
+        if not is_bot_enabled_for_chat(event.chat_id):
+            logger.info(f"Bot is disabled for chat {event.chat_id}, ignoring event")
+            return
+
         # Check if a user has joined or been added to the group
         if (event.user_added or event.user_joined) and isinstance(event.original_update, UpdateChannelParticipant):
             user_id = event.user.id
@@ -61,6 +75,12 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
     @client.on(events.NewMessage(chats=config.tracking_chat_ids))
     async def message_handler(event):
         logger.info(f"New message event received: {event}")
+
+        # Check if bot is enabled for this chat
+        if not is_bot_enabled_for_chat(event.chat_id):
+            logger.info(f"Bot is disabled for chat {event.chat_id}, ignoring message")
+            return
+
         sender = await event.get_sender()
         logger.info(f"Message sender: {sender.id}")
 
@@ -161,6 +181,32 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
             await event.reply(f"User {removed_user['name']} (ID: {removed_user['id']}) approval has been removed. They will be monitored for spam again.")
         else:
             await event.reply("User not found in approved list or error occurred.")
+
+    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/toggle_bot'))
+    async def toggle_bot_command_handler(event):
+        # Only allow admin to use this command
+        if event.sender_id != config.admin_id:
+            logger.info(f"Non-admin user {event.sender_id} tried to use /toggle_bot command")
+            await event.reply("Don't touch me, baka!")
+            return
+
+        logger.info(f"Admin {event.sender_id} used /toggle_bot command in group chat {event.chat_id}")
+
+        # Get or create group settings for this chat
+        group_settings = session.query(GroupSettings).filter_by(chat_id=event.chat_id).first()
+        if not group_settings:
+            # Create new settings entry for this chat
+            group_settings = GroupSettings(chat_id=event.chat_id, enabled=True)
+            session.add(group_settings)
+            session.commit()
+
+        # Toggle the enabled status
+        group_settings.enabled = not group_settings.enabled
+        session.commit()
+
+        status_text = "enabled" if group_settings.enabled else "disabled"
+        await event.reply(f"Bot is now {status_text} in this group.")
+        logger.info(f"Bot {status_text} for chat {event.chat_id}")
 
     @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/(toggle_approval|status|queue_status|retry_failed|clear_completed)'))
     async def admin_commands_group_handler(event):
@@ -468,6 +514,7 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
         "message_handler": message_handler,
         "approve_command_handler": approve_command_handler,
         "unapprove_command_handler": unapprove_command_handler,
+        "toggle_bot_command_handler": toggle_bot_command_handler,
         "admin_commands_group_handler": admin_commands_group_handler,
         "admin_reply_handler": admin_reply_handler,
         # expose helpers used by handlers when convenient to assert on behavior
@@ -475,5 +522,6 @@ def create_bot(session: Session, llm: Llm, userbot: UserBot, config) -> Telegram
         "remove_approval": remove_approval,
         "get_user_name": get_user_name,
         "check_user_approval": check_user_approval,
+        "is_bot_enabled_for_chat": is_bot_enabled_for_chat,
     }
     return client
