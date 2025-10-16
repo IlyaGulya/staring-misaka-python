@@ -170,16 +170,16 @@ class MessageQueue(Base):
         )
 
 
-def create_session(config) -> Session:
-    """Create database session with the given configuration"""
+def make_session_factory(config):
+    """Create a session factory (sessionmaker) with the given configuration.
+
+    This returns a sessionmaker that can be used to create new sessions as needed,
+    which is better for managing database connections across async handlers.
+    """
     # Configure SQLite for better concurrency with WAL mode and longer timeout
     engine = create_engine(
         f'sqlite:///{config.db_path}',
         echo=False,
-        connect_args={
-            'timeout': 30,  # Wait up to 30 seconds for lock
-            'check_same_thread': False  # Allow multi-threaded access
-        },
         pool_pre_ping=True,  # Verify connections before using
         pool_recycle=3600  # Recycle connections after 1 hour
     )
@@ -194,24 +194,42 @@ def create_session(config) -> Session:
         cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
         cursor.close()
 
-    Session = sessionmaker(bind=engine)
-    session = Session()
-
+    # Create tables
     Base.metadata.create_all(engine)
 
-    # Ensure we have a default AdminSettings entry
-    admin_settings = session.query(AdminSettings).first()
-    if not admin_settings:
-        admin_settings = AdminSettings(require_approval=False)
-        session.add(admin_settings)
+    # Return sessionmaker with expire_on_commit=False for better async handling
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def initialize_database(session_factory, config):
+    """Initialize database with default settings.
+
+    This should be called once at startup to ensure required data exists.
+    """
+    with session_factory() as session:
+        # Ensure we have a default AdminSettings entry
+        admin_settings = session.query(AdminSettings).first()
+        if not admin_settings:
+            admin_settings = AdminSettings(require_approval=False)
+            session.add(admin_settings)
+            session.commit()
+
+        # Ensure we have GroupSettings entries for all tracked chats (enabled by default)
+        for chat_id in config.tracking_chat_ids:
+            group_settings = session.query(GroupSettings).filter_by(chat_id=chat_id).first()
+            if not group_settings:
+                group_settings = GroupSettings(chat_id=chat_id, enabled=True)
+                session.add(group_settings)
         session.commit()
 
-    # Ensure we have GroupSettings entries for all tracked chats (enabled by default)
-    for chat_id in config.tracking_chat_ids:
-        group_settings = session.query(GroupSettings).filter_by(chat_id=chat_id).first()
-        if not group_settings:
-            group_settings = GroupSettings(chat_id=chat_id, enabled=True)
-            session.add(group_settings)
-    session.commit()
 
+# Backward compatibility: create_session returns a session
+def create_session(config):
+    """Create a session for backward compatibility with existing tests.
+
+    For new code, use make_session_factory() and initialize_database() instead.
+    """
+    session_factory = make_session_factory(config)
+    session = session_factory()
+    initialize_database(session_factory, config)
     return session

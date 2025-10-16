@@ -10,9 +10,9 @@ from db import MessageQueue, NewUser, AdminSettings, ApprovedUser, BannedUser, P
 
 class TestQueueProcessor:
     @pytest.fixture
-    def queue_processor(self, test_session, mock_llm, mock_userbot, mock_telegram_client, test_config):
+    def queue_processor(self, session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config):
         """Create a QueueProcessor instance for testing"""
-        return QueueProcessor(test_session, mock_llm, mock_userbot, mock_telegram_client, test_config)
+        return QueueProcessor(session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config)
 
 
     def test_add_message_to_queue(self, queue_processor):
@@ -152,8 +152,8 @@ class TestQueueProcessor:
     async def test_process_message_user_no_longer_monitored(self, queue_processor, test_session, sample_message_queue):
         """Test processing message when user is no longer being monitored"""
         # Don't create a NewUser entry, so user is not monitored
-        
-        await queue_processor._process_message(sample_message_queue)
+
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should mark as completed since user is not monitored
         test_session.refresh(sample_message_queue)
@@ -171,7 +171,7 @@ class TestQueueProcessor:
         test_session.add(approved_user)
         test_session.commit()
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should mark as completed since user is pre-approved
         test_session.refresh(sample_message_queue)
@@ -184,7 +184,7 @@ class TestQueueProcessor:
         # Configure LLM to return not spam
         mock_llm.is_spam.return_value = False
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should mark as completed and auto-approve user
         test_session.refresh(sample_message_queue)
@@ -225,7 +225,7 @@ class TestQueueProcessor:
         mock_sent_message.id = 12345
         mock_telegram_client.send_message.return_value = mock_sent_message
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should mark as completed and create pending ban request
         test_session.refresh(sample_message_queue)
@@ -256,7 +256,7 @@ class TestQueueProcessor:
         mock_user.first_name = "Spam User"
         mock_telegram_client.get_entity.return_value = mock_user
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should mark as completed and create banned user
         test_session.refresh(sample_message_queue)
@@ -286,7 +286,7 @@ class TestQueueProcessor:
         # Configure LLM to raise an exception
         mock_llm.is_spam.side_effect = Exception("API overloaded")
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should mark as failed with error message
         test_session.refresh(sample_message_queue)
@@ -314,7 +314,7 @@ class TestQueueProcessor:
             test_session.commit()
             
             before_time = datetime.now(UTC)
-            await queue_processor._process_message(sample_message_queue)
+            await queue_processor._process_message(sample_message_queue, test_session)
             after_time = datetime.now(UTC)
             
             test_session.refresh(sample_message_queue)

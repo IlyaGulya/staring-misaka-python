@@ -12,9 +12,9 @@ from llm import Llm
 
 class TestErrorHandling:
     @pytest.fixture
-    def queue_processor(self, test_session, mock_llm, mock_userbot, mock_telegram_client, test_config):
+    def queue_processor(self, session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config):
         """Create a QueueProcessor instance for testing"""
-        return QueueProcessor(test_session, mock_llm, mock_userbot, mock_telegram_client, test_config)
+        return QueueProcessor(session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config)
 
     @pytest.mark.asyncio
     async def test_anthropic_overloaded_error_handling(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm):
@@ -26,7 +26,7 @@ class TestErrorHandling:
             body={'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}}
         )
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should handle the error gracefully
         test_session.refresh(sample_message_queue)
@@ -58,7 +58,7 @@ class TestErrorHandling:
         
         # Process the message multiple times until max retries
         for expected_retry_count in range(1, 6):  # 1-5 retries
-            await queue_processor._process_message(queue_item)
+            await queue_processor._process_message(queue_item, test_session)
             
             test_session.refresh(queue_item)
             assert queue_item.status == 'failed'
@@ -84,7 +84,7 @@ class TestErrorHandling:
         # Mock a database error during processing - need to catch and re-check
         try:
             with patch.object(test_session, 'commit', side_effect=SQLAlchemyError("Database connection lost")):
-                await queue_processor._process_message(sample_message_queue)
+                await queue_processor._process_message(sample_message_queue, test_session)
         except SQLAlchemyError:
             # The error might propagate up, which is expected
             pass
@@ -116,7 +116,7 @@ class TestErrorHandling:
         mock_telegram_client.get_entity.side_effect = Exception("Telegram API error")
         mock_telegram_client.send_message.side_effect = Exception("Failed to send message")
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should handle the error
         test_session.refresh(sample_message_queue)
@@ -140,7 +140,7 @@ class TestErrorHandling:
         mock_user.username = "testuser"
         mock_telegram_client.get_entity.return_value = mock_user
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should handle the error
         test_session.refresh(sample_message_queue)
@@ -153,7 +153,7 @@ class TestErrorHandling:
         # First, cause an error
         mock_llm.is_spam.side_effect = Exception("Temporary error")
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Verify it failed
         test_session.refresh(sample_message_queue)
@@ -169,7 +169,7 @@ class TestErrorHandling:
         sample_message_queue.next_retry_at = None
         test_session.commit()
         
-        await queue_processor._process_message(sample_message_queue)
+        await queue_processor._process_message(sample_message_queue, test_session)
         
         # Should succeed now
         test_session.refresh(sample_message_queue)
@@ -211,9 +211,9 @@ class TestErrorHandling:
         # Process all messages concurrently
         tasks = []
         for message in messages:
-            task = asyncio.create_task(queue_processor._process_message(message))
+            task = asyncio.create_task(queue_processor._process_message(message, test_session))
             tasks.append(task)
-        
+
         await asyncio.gather(*tasks, return_exceptions=True)
         
         # Check results
@@ -229,13 +229,18 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_process_pending_messages_with_mixed_results(self, queue_processor, test_session, mock_llm):
         """Test processing multiple pending messages with mixed success/failure"""
+        # Set admin settings to not require approval (for automatic bans)
+        admin_settings = test_session.query(AdminSettings).first()
+        admin_settings.require_approval = False
+        test_session.commit()
+
         # Create messages with different outcomes
         messages_data = [
             (1, "success", False),
             (2, "failure", Exception("API error")),
             (3, "success", True),
         ]
-        
+
         for user_id, outcome, result in messages_data:
             queue_item = MessageQueue(
                 user_id=user_id,
@@ -245,39 +250,44 @@ class TestErrorHandling:
                 status='pending'
             )
             new_user = NewUser(user_id=user_id, chat_id=67890)
-            
+
             test_session.add(queue_item)
             test_session.add(new_user)
-        
+
         test_session.commit()
-        
+
         # Configure LLM responses
         def llm_side_effect(message_text):
             if "user 2" in message_text:
                 raise Exception("API error")
             return "user 3" in message_text  # True for user 3, False for user 1
-        
+
         mock_llm.is_spam.side_effect = llm_side_effect
-        
+
         # Mock the telegram client get_entity to return a string instead of a mock
         queue_processor.telegram_client.get_entity.return_value = MagicMock()
         queue_processor.telegram_client.get_entity.return_value.username = "testuser"
         queue_processor.telegram_client.get_entity.return_value.first_name = "Test User"
         
-        # Process pending messages
+        # Process pending messages - run multiple times since concurrent limit is 3
         await queue_processor._process_pending_messages()
-        
+        # Run again to ensure all messages are processed
+        await queue_processor._process_pending_messages()
+
+        # Refresh the session to get latest data
+        test_session.expire_all()
+
         # Check results
         all_messages = test_session.query(MessageQueue).order_by(MessageQueue.user_id).all()
-        
+
         # User 1: should be completed, not spam
         assert all_messages[0].status == 'completed'
         assert all_messages[0].spam_result is False
-        
+
         # User 2: should be failed with error
         assert all_messages[1].status == 'failed'
         assert "API error" in all_messages[1].error_message
-        
+
         # User 3: should be completed, spam
         assert all_messages[2].status == 'completed'
         assert all_messages[2].spam_result is True

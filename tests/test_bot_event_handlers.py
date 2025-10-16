@@ -14,7 +14,7 @@ class TestBotEventHandlers:
     """Test bot event handlers (chat_action_handler, notspam_command_handler)"""
 
     @pytest.fixture
-    def event_env(self, test_session, mock_llm, mock_userbot, test_config, mock_queue_processor):
+    def event_env(self, session_factory, test_session, mock_llm, mock_userbot, test_config, mock_queue_processor):
         """Create a bot with a patched Telethon client and return (bot, client)."""
         with patch('telegram.TelegramClient') as mock_client_cls:
             mock_client = MagicMock()
@@ -26,7 +26,7 @@ class TestBotEventHandlers:
             mock_client.on = on_decorator
             mock_client_cls.return_value = mock_client
 
-            bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+            bot = create_bot(session_factory, mock_llm, mock_userbot, test_config)
             bot.queue_processor = mock_queue_processor
             return bot, mock_client
     

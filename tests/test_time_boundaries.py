@@ -9,11 +9,11 @@ from config import Config
 
 class TestTimeBoundaryEdgeCases:
     """Test time-boundary edge cases for clear_completed_messages"""
-    
+
     @pytest.fixture
-    def queue_processor(self, test_session, mock_llm, mock_userbot, mock_telegram_client, test_config):
+    def queue_processor(self, session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config):
         """Create a QueueProcessor instance for testing"""
-        return QueueProcessor(test_session, mock_llm, mock_userbot, mock_telegram_client, test_config)
+        return QueueProcessor(session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config)
     
     def test_clear_completed_messages_with_old_messages(self, queue_processor, test_session):
         """Test clear_completed_messages clears old messages but preserves recent ones"""

@@ -51,21 +51,38 @@ def temp_db():
 
 
 @pytest.fixture
-def test_session(temp_db, test_config):
+def session_factory(temp_db, test_config):
+    """Create a sessionmaker for tests using the same setup as production.
+
+    This ensures tests use the same WAL mode, busy_timeout, and other PRAGMA
+    settings as production, making concurrency tests realistic.
+    """
+    from db import make_session_factory
+
+    # Update test config to use the temp database
+    test_config.db_path = temp_db
+
+    # Use the production session factory setup to inherit all PRAGMA settings
+    factory = make_session_factory(test_config)
+
+    # Create all tables
+    Base.metadata.create_all(factory().bind)
+
+    return factory
+
+
+@pytest.fixture
+def test_session(session_factory, test_config):
     """Create a test database session"""
-    engine = create_engine(f'sqlite:///{temp_db}', echo=False)
-    Base.metadata.create_all(engine)
-    
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    
+    session = session_factory()
+
     # Add default admin settings
     admin_settings = AdminSettings(require_approval=False)
     session.add(admin_settings)
     session.commit()
-    
+
     yield session
-    
+
     session.close()
 
 

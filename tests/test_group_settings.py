@@ -14,7 +14,7 @@ class TestGroupSettings:
     """Test group settings functionality (enable/disable bot per group)"""
 
     @pytest.fixture
-    def event_env(self, test_session, mock_llm, mock_userbot, test_config, mock_queue_processor):
+    def event_env(self, session_factory, test_session, mock_llm, mock_userbot, test_config, mock_queue_processor):
         """Create a bot with a patched Telethon client and return (bot, client)."""
         with patch('telegram.TelegramClient') as mock_client_cls:
             mock_client = MagicMock()
@@ -26,7 +26,7 @@ class TestGroupSettings:
             mock_client.on = on_decorator
             mock_client_cls.return_value = mock_client
 
-            bot = create_bot(test_session, mock_llm, mock_userbot, test_config)
+            bot = create_bot(session_factory, mock_llm, mock_userbot, test_config)
             bot.queue_processor = mock_queue_processor
             return bot, mock_client
 
@@ -182,7 +182,7 @@ class TestGroupSettings:
 
     @pytest.mark.asyncio
     async def test_queue_processor_skips_messages_when_bot_disabled(
-        self, test_session, mock_llm, mock_userbot, test_config
+        self, session_factory, test_session, mock_llm, mock_userbot, test_config
     ):
         """Test that queue processor skips messages when bot is disabled"""
         # Create mock telegram client
@@ -191,7 +191,7 @@ class TestGroupSettings:
 
         # Create queue processor
         queue_processor = QueueProcessor(
-            test_session, mock_llm, mock_userbot, mock_client, test_config
+            session_factory, mock_llm, mock_userbot, mock_client, test_config
         )
 
         # Disable bot for this chat
