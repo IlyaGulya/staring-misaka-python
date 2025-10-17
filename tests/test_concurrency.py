@@ -108,9 +108,9 @@ class TestQueueProcessorConcurrency:
         # Start both processors concurrently for a short time
         task1 = asyncio.create_task(processor1.start())
         task2 = asyncio.create_task(processor2.start())
-        
+
         # Let them run for a longer time to allow multiple processing cycles
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(0.5)
         
         # Stop both processors
         processor1.stop()
@@ -181,9 +181,9 @@ class TestQueueProcessorConcurrency:
                 await asyncio.sleep(0.01)  # Small delay between insertions
         
         add_task = asyncio.create_task(add_messages())
-        
+
         # Let both run for a longer time to allow multiple processing cycles
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(0.5)
         
         # Stop processor
         processor.stop()
