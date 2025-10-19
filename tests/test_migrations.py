@@ -60,13 +60,14 @@ class TestDatabaseMigrations:
             
             expected_tables = [
                 'admin_settings',
-                'approved_users', 
+                'approved_users',
                 'banned_users',
+                'group_settings',
                 'message_queue',
                 'new_users',
                 'pending_ban_requests'
             ]
-            
+
             assert set(tables) == set(expected_tables)
 
     def test_migration_downgrade_removes_tables(self, alembic_config, temp_db):
@@ -167,7 +168,8 @@ class TestDatabaseMigrations:
                 'admin_settings',
                 'approved_users',
                 'banned_users',
-                'message_queue', 
+                'group_settings',
+                'message_queue',
                 'new_users',
                 'pending_ban_requests'
             ]

@@ -8,9 +8,9 @@ from queue_processor import QueueProcessor
 
 class TestAdminCommands:
     @pytest.fixture
-    def queue_processor_with_messages(self, test_session, mock_llm, mock_telegram_client, test_config):
+    def queue_processor_with_messages(self, session_factory, test_session, mock_llm, mock_telegram_client, test_config):
         """Create a QueueProcessor with sample messages for testing"""
-        processor = QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
+        processor = QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
         
         # Create messages with different statuses
         now = datetime.now(UTC)
@@ -51,9 +51,9 @@ class TestAdminCommands:
         assert status['failed'] == 3
         assert status['total'] == 8
 
-    def test_get_queue_status_empty_queue(self, test_session, mock_llm, mock_telegram_client, test_config):
+    def test_get_queue_status_empty_queue(self, session_factory, mock_llm, mock_telegram_client, test_config):
         """Test queue status when queue is empty"""
-        processor = QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
+        processor = QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
         
         status = processor.get_queue_status()
         
@@ -88,9 +88,9 @@ class TestAdminCommands:
         ).first()
         assert exceeded_msg.status == 'failed'
 
-    def test_retry_failed_messages_none_eligible(self, test_session, mock_llm, mock_telegram_client, test_config):
+    def test_retry_failed_messages_none_eligible(self, session_factory, test_session, mock_llm, mock_telegram_client, test_config):
         """Test retrying failed messages when none are eligible"""
-        processor = QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
+        processor = QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
         
         # Create a message that exceeded max retries
         exceeded_msg = MessageQueue(
@@ -132,9 +132,9 @@ class TestAdminCommands:
         remaining_completed = test_session.query(MessageQueue).filter_by(status='completed').all()
         assert len(remaining_completed) == 0
 
-    def test_clear_completed_messages_no_completed(self, test_session, mock_llm, mock_telegram_client, test_config):
+    def test_clear_completed_messages_no_completed(self, session_factory, test_session, mock_llm, mock_telegram_client, test_config):
         """Test clearing completed messages when none exist"""
-        processor = QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
+        processor = QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
         
         # Create only non-completed messages
         pending_msg = MessageQueue(
@@ -153,11 +153,11 @@ class TestAdminCommands:
         assert len(remaining) == 1
         assert remaining[0].status == 'pending'
 
-    def test_admin_commands_integration_with_telegram_bot(self, test_session, mock_llm, mock_telegram_client, test_config):
+    def test_admin_commands_integration_with_telegram_bot(self, session_factory, test_session, mock_llm, mock_telegram_client, test_config):
         """Test admin commands integration with Telegram bot handlers"""
         from telegram import create_bot
-
-        processor = QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
+        
+        processor = QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
         
         # Create some test data
         test_messages = [
@@ -194,9 +194,9 @@ class TestAdminCommands:
         assert "Queue Status:" in expected_message
 
 
-    def test_admin_settings_integration(self, test_session, mock_llm, mock_telegram_client, test_config):
+    def test_admin_settings_integration(self, session_factory, test_session, mock_llm, mock_telegram_client, test_config):
         """Test that admin commands work correctly with AdminSettings"""
-        processor = QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
+        processor = QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
         
         # Check initial admin settings
         admin_settings = test_session.query(AdminSettings).first()

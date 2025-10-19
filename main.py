@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from config import load_config
-from db import create_session
+from db import make_session_factory, initialize_database
 from llm import create_llm
 from telegram import create_bot
 from queue_processor import QueueProcessor
@@ -10,7 +10,7 @@ from queue_processor import QueueProcessor
 
 async def main():
     logger = logging.getLogger(__name__)
-    
+
     # Load and validate configuration first
     try:
         config = load_config()
@@ -18,30 +18,36 @@ async def main():
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
         return 1
-    
+
     try:
         # Initialize components with configuration
-        session = create_session(config)
+        session_factory = make_session_factory(config)
+        logger.info("Database session factory created")
+
+        # Initialize database with default settings
+        initialize_database(session_factory, config)
+        logger.info("Database initialized")
+
         llm = create_llm(config)
 
         # Create and start bot
-        bot = create_bot(session, llm, config)
+        bot = create_bot(session_factory, llm, config)
         await bot.start(bot_token=config.bot_token)
         logger.info("Telegram bot started")
 
         # Create queue processor (now uses the bot client directly)
-        queue_processor = QueueProcessor(session, llm, bot, config)
+        queue_processor = QueueProcessor(session_factory, llm, bot, config)
 
         # Set queue processor reference on bot
         bot.queue_processor = queue_processor
         logger.info("Queue processor connected to bot")
-        
+
         # Start queue processor
         queue_processor_task = asyncio.create_task(queue_processor.start())
         logger.info("Queue processor started")
-        
+
         logger.info("All components started successfully")
-        
+
         try:
             # Run both the bot and queue processor
             await asyncio.gather(
@@ -53,12 +59,23 @@ async def main():
             queue_processor.stop()
             await bot.disconnect()
             return 0
-            
+
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         return 1
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+    # Configure logging with a cleaner format
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+    )
+
+    # Reduce verbosity of third-party libraries
+    logging.getLogger('telethon').setLevel(logging.WARNING)
+    logging.getLogger('anthropic').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
+
     asyncio.run(main())

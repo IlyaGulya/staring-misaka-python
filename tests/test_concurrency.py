@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from queue_processor import QueueProcessor
 from db import MessageQueue, NewUser, create_session, AdminSettings
 from config import Config
+from tests.conftest import wait_for_condition
 
 
 class TestQueueProcessorConcurrency:
@@ -29,8 +30,15 @@ class TestQueueProcessorConcurrency:
     @pytest.fixture
     def setup_shared_data(self, shared_db_config):
         """Setup shared data in the database"""
-        session = create_session(shared_db_config)
-        
+        from db import make_session_factory, initialize_database, Base
+
+        # Create session factory and initialize database
+        session_factory = make_session_factory(shared_db_config)
+        initialize_database(session_factory, shared_db_config)
+
+        # Create a session to add test data
+        session = session_factory()
+
         # Add test messages to queue
         messages = []
         for i in range(5):
@@ -43,7 +51,7 @@ class TestQueueProcessorConcurrency:
             )
             messages.append(msg)
             session.add(msg)
-        
+
         # Add corresponding NewUser entries
         for i in range(5):
             new_user = NewUser(
@@ -51,7 +59,7 @@ class TestQueueProcessorConcurrency:
                 chat_id=shared_db_config.tracking_chat_ids[0]
             )
             session.add(new_user)
-        
+
         session.commit()
         session.close()
         return messages
@@ -59,10 +67,12 @@ class TestQueueProcessorConcurrency:
     @pytest.mark.asyncio
     async def test_concurrent_processors_process_different_messages(self, shared_db_config, setup_shared_data):
         """Test that concurrent processors process different messages (row locking)"""
-        # Create two separate sessions for two processors
-        session1 = create_session(shared_db_config)
-        session2 = create_session(shared_db_config)
-        
+        # Create sessionmaker
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy import create_engine
+        engine = create_engine(f'sqlite:///{shared_db_config.db_path}', echo=False)
+        SessionFactory = sessionmaker(bind=engine, expire_on_commit=False)
+
         # Mock LLM and other dependencies
         mock_llm1 = AsyncMock()
         mock_llm1.is_spam.return_value = False
@@ -72,87 +82,100 @@ class TestQueueProcessorConcurrency:
         mock_telegram_client1 = AsyncMock()
         mock_telegram_client2 = AsyncMock()
 
-        # Create two processors
-        processor1 = QueueProcessor(session1, mock_llm1, mock_telegram_client1, shared_db_config, processing_delay=0.02)
-        processor2 = QueueProcessor(session2, mock_llm2, mock_telegram_client2, shared_db_config, processing_delay=0.02)
-        
+        # Create two processors with faster processing delay
+        processor1 = QueueProcessor(SessionFactory, mock_llm1, mock_telegram_client1, shared_db_config, processing_delay=0.01)
+        processor2 = QueueProcessor(SessionFactory, mock_llm2, mock_telegram_client2, shared_db_config, processing_delay=0.01)
+
         processed_messages_1 = []
         processed_messages_2 = []
-        
+
         # Track which messages each processor handles
         original_process_1 = processor1._process_message
         original_process_2 = processor2._process_message
-        
+
         async def track_process_1(message, session=None):
             processed_messages_1.append(message.id)
             return await original_process_1(message, session)
-        
+
         async def track_process_2(message, session=None):
             processed_messages_2.append(message.id)
             return await original_process_2(message, session)
-        
+
         processor1._process_message = track_process_1
         processor2._process_message = track_process_2
-        
-        # Start both processors concurrently for a short time
+
+        # Start both processors concurrently
         task1 = asyncio.create_task(processor1.start())
         task2 = asyncio.create_task(processor2.start())
-        
-        # Let them run for a longer time to allow multiple processing cycles
-        await asyncio.sleep(3.0)
-        
+
+        # Wait for messages to be processed (expect all 5 messages from setup)
+        await wait_for_condition(
+            lambda: len(processed_messages_1) + len(processed_messages_2) >= 5,
+            timeout=2.0,
+            poll_interval=0.01,
+            description="all 5 messages to be processed"
+        )
+
         # Stop both processors
         processor1.stop()
         processor2.stop()
-        
+
         # Wait for tasks to complete
         await asyncio.gather(task1, task2, return_exceptions=True)
-        
+
         # Verify no message was processed by both processors
         overlap = set(processed_messages_1) & set(processed_messages_2)
         assert len(overlap) == 0, f"Messages processed by both processors: {overlap}"
-        
-        # Verify at least some messages were processed
+
+        # Verify all messages were processed
         total_processed = len(processed_messages_1) + len(processed_messages_2)
-        assert total_processed > 0, "No messages were processed"
-        
-        session1.close()
-        session2.close()
+        assert total_processed >= 5, f"Expected at least 5 messages processed, got {total_processed}"
     
     @pytest.mark.asyncio
     async def test_concurrent_message_insertion_and_processing(self, shared_db_config):
         """Test concurrent message insertion while processing"""
-        session = create_session(shared_db_config)
-        
+        # Create sessionmaker with initialized tables
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy import create_engine
+        from db import Base, initialize_database, make_session_factory
+
+        # Use make_session_factory to ensure proper setup
+        SessionFactory = make_session_factory(shared_db_config)
+        initialize_database(SessionFactory, shared_db_config)
+
+        session = SessionFactory()
+
         # Mock dependencies
         mock_llm = AsyncMock()
         mock_llm.is_spam.return_value = False
         mock_telegram_client = AsyncMock()
 
-        processor = QueueProcessor(session, mock_llm, mock_telegram_client, shared_db_config, processing_delay=0.01)
-        
+        processor = QueueProcessor(SessionFactory, mock_llm, mock_telegram_client, shared_db_config, processing_delay=0.005)
+
         # Add initial NewUser for message processing
         new_user = NewUser(user_id=5000, chat_id=shared_db_config.tracking_chat_ids[0])
         session.add(new_user)
         session.commit()
-        
+
+        messages_added = 0
         processed_count = 0
-        
+
         # Track processed messages
         original_process = processor._process_message
-        
+
         async def track_process(message, session=None):
             nonlocal processed_count
             processed_count += 1
             return await original_process(message, session)
-        
+
         processor._process_message = track_process
-        
+
         # Start processor
         processor_task = asyncio.create_task(processor.start())
-        
+
         # Concurrently add messages while processor is running
         async def add_messages():
+            nonlocal messages_added
             for i in range(10):
                 processor.add_message_to_queue(
                     user_id=5000,
@@ -160,37 +183,56 @@ class TestQueueProcessorConcurrency:
                     message_id=3000 + i,
                     message_text=f"Concurrent message {i}"
                 )
-                await asyncio.sleep(0.01)  # Small delay between insertions
-        
+                messages_added += 1
+                await asyncio.sleep(0.005)  # Small delay between insertions
+
         add_task = asyncio.create_task(add_messages())
-        
-        # Let both run for a longer time to allow multiple processing cycles
-        await asyncio.sleep(3.0)
-        
+
+        # Wait for all messages to be added
+        await wait_for_condition(
+            lambda: messages_added >= 10,
+            timeout=2.0,
+            poll_interval=0.01,
+            description="all messages to be added to queue"
+        )
+
+        # Wait for all messages to be processed
+        await wait_for_condition(
+            lambda: processed_count >= 10,
+            timeout=2.0,
+            poll_interval=0.01,
+            description="all messages to be processed"
+        )
+
         # Stop processor
         processor.stop()
-        await add_task  # Ensure all messages are added
-        
+        await add_task  # Ensure add task is complete
+
         # Wait for processor to finish
         await asyncio.gather(processor_task, return_exceptions=True)
-        
+
         # Verify messages were processed without conflicts
-        assert processed_count > 0, "No messages were processed"
-        
+        assert processed_count == 10, f"Expected 10 messages processed, got {processed_count}"
+
         # Verify final queue state is consistent
         remaining_pending = session.query(MessageQueue).filter_by(status='pending').count()
         completed = session.query(MessageQueue).filter_by(status='completed').count()
-        
+
         assert remaining_pending + completed == 10, "Message count inconsistency"
-        
+
         session.close()
     
     @pytest.mark.asyncio
     async def test_concurrent_retry_operations(self, shared_db_config):
         """Test concurrent retry operations don't cause conflicts"""
-        session1 = create_session(shared_db_config)
-        session2 = create_session(shared_db_config)
-        
+        # Create sessionmaker with initialized tables
+        from db import make_session_factory, initialize_database
+
+        SessionFactory = make_session_factory(shared_db_config)
+        initialize_database(SessionFactory, shared_db_config)
+
+        session1 = SessionFactory()
+
         # Add failed messages
         failed_messages = []
         for i in range(5):
@@ -205,17 +247,17 @@ class TestQueueProcessorConcurrency:
             )
             failed_messages.append(msg)
             session1.add(msg)
-        
+
         session1.commit()
-        
+
         # Mock dependencies for processors
         mock_llm1 = AsyncMock()
         mock_llm2 = AsyncMock()
         mock_telegram_client1 = AsyncMock()
         mock_telegram_client2 = AsyncMock()
 
-        processor1 = QueueProcessor(session1, mock_llm1, mock_telegram_client1, shared_db_config, processing_delay=0.01)
-        processor2 = QueueProcessor(session2, mock_llm2, mock_telegram_client2, shared_db_config, processing_delay=0.01)
+        processor1 = QueueProcessor(SessionFactory, mock_llm1, mock_telegram_client1, shared_db_config, processing_delay=0.01)
+        processor2 = QueueProcessor(SessionFactory, mock_llm2, mock_telegram_client2, shared_db_config, processing_delay=0.01)
         
         # Perform concurrent retry operations
         async def concurrent_retries():
@@ -232,25 +274,30 @@ class TestQueueProcessorConcurrency:
         for result in results:
             if isinstance(result, Exception):
                 pytest.fail(f"Retry operation failed: {result}")
-        
+
         # Verify final state is consistent
-        session3 = create_session(shared_db_config)
+        session3 = SessionFactory()
         pending_count = session3.query(MessageQueue).filter_by(status='pending').count()
         failed_count = session3.query(MessageQueue).filter_by(status='failed').count()
-        
+
         # All messages should be reset to pending
         assert pending_count == 5
         assert failed_count == 0
-        
+
         session1.close()
-        session2.close()
         session3.close()
     
     @pytest.mark.asyncio
     async def test_processor_graceful_shutdown_with_active_processing(self, shared_db_config):
         """Test processor graceful shutdown while actively processing messages"""
-        session = create_session(shared_db_config)
-        
+        # Create sessionmaker with initialized tables
+        from db import make_session_factory, initialize_database
+
+        SessionFactory = make_session_factory(shared_db_config)
+        initialize_database(SessionFactory, shared_db_config)
+
+        session = SessionFactory()
+
         # Add messages and new users
         for i in range(3):
             msg = MessageQueue(
@@ -261,39 +308,48 @@ class TestQueueProcessorConcurrency:
                 status='pending'
             )
             session.add(msg)
-            
+
             new_user = NewUser(
                 user_id=6000 + i,
                 chat_id=shared_db_config.tracking_chat_ids[0]
             )
             session.add(new_user)
-        
+
         session.commit()
-        
+
         # Mock LLM with slow processing to simulate active work
+        processing_started = False
         mock_llm = AsyncMock()
+
         async def slow_spam_check(message):
+            nonlocal processing_started
+            processing_started = True
             await asyncio.sleep(0.2)  # Simulate slow processing
             return False
 
         mock_llm.is_spam.side_effect = slow_spam_check
         mock_telegram_client = AsyncMock()
 
-        processor = QueueProcessor(session, mock_llm, mock_telegram_client, shared_db_config, processing_delay=0.01)
-        
+        processor = QueueProcessor(SessionFactory, mock_llm, mock_telegram_client, shared_db_config, processing_delay=0.005)
+
         # Start processor
         task = asyncio.create_task(processor.start())
-        
-        # Let it start processing
-        await asyncio.sleep(0.1)
-        
+
+        # Wait for processing to actually start
+        await wait_for_condition(
+            lambda: processing_started,
+            timeout=1.0,
+            poll_interval=0.01,
+            description="processing to start"
+        )
+
         # Stop processor while it's processing
         processor.stop()
-        
+
         # Should shutdown gracefully
         await asyncio.gather(task, return_exceptions=True)
-        
+
         # Verify processor stopped
         assert processor.running is False
-        
+
         session.close()
