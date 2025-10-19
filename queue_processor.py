@@ -40,8 +40,8 @@ class QueueProcessor:
         
     async def start(self):
         self.running = True
-        logger.info("Queue processor started")
-        
+        logger.info("[QUEUE] Processor started")
+
         while self.running:
             try:
                 await self._process_pending_messages()
@@ -49,10 +49,10 @@ class QueueProcessor:
             except Exception as e:
                 logger.error(f"Error in queue processor main loop: {str(e)}")
                 await asyncio.sleep(5.0)  # Wait longer on error
-                
+
     def stop(self):
         self.running = False
-        logger.info("Queue processor stopped")
+        logger.info("[QUEUE] Processor stopped")
         
     async def _process_pending_messages(self):
         now = datetime.now(UTC)
@@ -102,19 +102,19 @@ class QueueProcessor:
             # Fetch the message
             queue_item = process_session.query(MessageQueue).filter_by(id=message_id).first()
             if not queue_item:
-                logger.warning(f"Message {message_id} not found or already processed")
+                logger.debug(f"Message {message_id} not found or already processed")
                 return
 
             # Check if already being processed (should be 'claimed' from selection phase)
             if queue_item.status not in ['claimed', 'pending', 'failed']:
-                logger.info(f"Message {message_id} is already being processed or completed")
+                logger.debug(f"Message {message_id} already being processed or completed")
                 return
 
             await self._process_message(queue_item, process_session)
     
     async def _process_message(self, queue_item: MessageQueue, session: Session):
         """Process a message from the queue. Session must be provided."""
-        logger.info(f"Processing message queue item {queue_item.id} for user {queue_item.user_id}")
+        logger.debug(f"Processing queue item {queue_item.id} for user {queue_item.user_id}")
 
         # Mark as processing
         queue_item.status = 'processing'
@@ -125,7 +125,7 @@ class QueueProcessor:
             # Check if bot is enabled for this chat
             group_settings = session.query(GroupSettings).filter_by(chat_id=queue_item.chat_id).first()
             if group_settings and not group_settings.enabled:
-                logger.info(f"Bot is disabled for chat {queue_item.chat_id}, marking queue item as completed")
+                logger.debug(f"Bot disabled for chat {queue_item.chat_id}, skipping queue item")
                 queue_item.status = 'completed'
                 queue_item.processed_at = datetime.now(UTC)
                 queue_item.error_message = "Bot disabled for this chat"
@@ -139,36 +139,39 @@ class QueueProcessor:
             ).first()
 
             if not new_user:
-                logger.info(f"User {queue_item.user_id} no longer being monitored, marking queue item as completed")
+                logger.debug(f"User {queue_item.user_id} no longer monitored, skipping")
                 queue_item.status = 'completed'
                 queue_item.processed_at = datetime.now(UTC)
                 session.commit()
                 return
-                
+
             # Check if user is pre-approved
             approved_user = session.query(ApprovedUser).filter_by(
                 user_id=queue_item.user_id,
                 chat_id=queue_item.chat_id
             ).first()
-            
+
             if approved_user:
-                logger.info(f"User {queue_item.user_id} is pre-approved, marking queue item as completed")
+                logger.debug(f"User {queue_item.user_id} is pre-approved, skipping")
                 queue_item.status = 'completed'
                 queue_item.processed_at = datetime.now(UTC)
                 session.commit()
                 return
-            
+
             # Perform spam check
-            logger.info(f"Performing spam check for user {queue_item.user_id}")
+            logger.debug(f"Running spam check for user {queue_item.user_id}")
             is_spam = await self.llm.is_spam(queue_item.message_text)
-            
+
             # Update queue item with result
             queue_item.spam_result = is_spam
             queue_item.status = 'completed'
             queue_item.processed_at = datetime.now(UTC)
             queue_item.error_message = None
-            
-            logger.info(f"Spam check completed for user {queue_item.user_id}: is_spam={is_spam}")
+
+            if is_spam:
+                logger.info(f"[SPAM] Detected from user_id={queue_item.user_id} chat_id={queue_item.chat_id}")
+            else:
+                logger.debug(f"Not spam: user {queue_item.user_id}")
             
             # Process the spam result
             await self._handle_spam_result(queue_item, is_spam, session)
@@ -177,18 +180,18 @@ class QueueProcessor:
             
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Error processing message queue item {queue_item.id}: {error_msg}")
-            
+            logger.error(f"Error processing queue item {queue_item.id}: {error_msg}")
+
             # Update queue item with error
             queue_item.error_message = error_msg
             queue_item.status = 'failed'
-            
+
             # Calculate next retry time with exponential backoff
             backoff_seconds = min(300, 30 * (2 ** (queue_item.retry_count - 1)))  # Max 5 minutes
             queue_item.next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
-            
-            logger.info(f"Will retry message {queue_item.id} in {backoff_seconds} seconds (attempt {queue_item.retry_count}/{queue_item.max_retries})")
-            
+
+            logger.warning(f"Will retry message {queue_item.id} in {backoff_seconds}s (attempt {queue_item.retry_count}/{queue_item.max_retries})")
+
             session.commit()
             
     async def _handle_spam_result(self, queue_item: MessageQueue, is_spam: bool, session: Session):
@@ -215,7 +218,7 @@ class QueueProcessor:
             
     async def _notify_admin(self, queue_item: MessageQueue, session: Session):
         """Notify admin about potential spam. Session must be provided."""
-        logger.info(f"Notifying admin about potential spam from user {queue_item.user_id}")
+        logger.info(f"[SPAM] Requesting admin approval for user_id={queue_item.user_id} chat_id={queue_item.chat_id}")
 
         try:
             # Get user name
@@ -226,7 +229,7 @@ class QueueProcessor:
                 f"{queue_item.message_text}\n\nShould I ban this user? Reply 'yes' to ban."
             )
             sent_message = await self.telegram_client.send_message(self.config.admin_id, admin_message)
-            logger.info(f"Sent admin notification message with ID: {sent_message.id}")
+            logger.debug(f"Admin notification sent with message ID: {sent_message.id}")
 
             # Store the pending request in the database
             pending_request = PendingBanRequest(
@@ -238,7 +241,7 @@ class QueueProcessor:
                 created_at=datetime.now(UTC)
             )
             session.add(pending_request)
-            logger.info(f"Added pending ban request for user {queue_item.user_id} to database")
+            logger.debug(f"Pending ban request stored for user {queue_item.user_id}")
             
         except Exception as e:
             logger.error(f"Error notifying admin about user {queue_item.user_id}: {str(e)}")
@@ -246,7 +249,8 @@ class QueueProcessor:
             
     async def _process_ban(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool, session: Session):
         """Process a ban for a user. Session must be provided."""
-        logger.info(f"{'Automatically banning' if is_automatic else 'Admin approved ban for'} user {user_id}")
+        ban_type = "automatic" if is_automatic else "manual"
+        logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
 
         try:
             # Send the ban command
@@ -269,7 +273,7 @@ class QueueProcessor:
             if new_user:
                 session.delete(new_user)
 
-            logger.info(f"Stored ban information for user {user_id}")
+            logger.debug(f"Ban information stored for user {user_id}")
 
             # Notify admin about the ban
             admin_message = (
@@ -284,21 +288,23 @@ class QueueProcessor:
             
     async def _auto_approve_user(self, user_id: int, chat_id: int, session: Session):
         """Auto-approve a user who passed spam check. Session must be provided."""
-        logger.info(f"Auto-approving user {user_id} in chat {chat_id}")
+        logger.debug(f"Auto-approving user {user_id} in chat {chat_id}")
 
         try:
             # Remove from monitoring
             new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
             if new_user:
                 session.delete(new_user)
-                logger.info(f"User {user_id} removed from monitoring in chat {chat_id}")
-                
+                logger.debug(f"User {user_id} removed from monitoring")
+
             # Add to approved users list
             existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
             if not existing_approval:
                 approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now(UTC))
                 session.add(approved_user)
-                logger.info(f"User {user_id} auto-approved and added to approved list for chat {chat_id}")
+                logger.debug(f"User {user_id} added to approved list")
+
+            logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
                 
         except Exception as e:
             logger.error(f"Error auto-approving user {user_id}: {str(e)}")
@@ -320,7 +326,7 @@ class QueueProcessor:
 
         Uses SQLite's INSERT OR IGNORE to atomically handle duplicate messages.
         """
-        logger.info(f"Adding message to queue for user {user_id} in chat {chat_id}")
+        logger.debug(f"Adding message to queue for user {user_id}")
 
         from sqlalchemy.dialects.sqlite import insert
         from sqlalchemy.exc import OperationalError
@@ -354,10 +360,10 @@ class QueueProcessor:
                     ).first()
 
                     if result:
-                        logger.info(f"Message in queue with ID: {result.id}")
+                        logger.debug(f"Message queued with ID: {result.id}")
                         return result
                     else:
-                        logger.warning(f"Message not found after insert for user {user_id}")
+                        logger.debug(f"Message not found after insert for user {user_id}")
                         # Continue to retry
                         time.sleep(delay)
                         continue
@@ -418,7 +424,8 @@ class QueueProcessor:
                         count += 1
 
                 session.commit()
-                logger.info(f"Reset {count} failed messages to pending status")
+                if count > 0:
+                    logger.info(f"[QUEUE] Reset {count} failed messages to pending")
                 return count
             except Exception:
                 # If there's any database error, return 0
@@ -435,5 +442,6 @@ class QueueProcessor:
             ).delete()
 
             session.commit()
-            logger.info(f"Cleared {deleted_count} completed messages older than {older_than_hours} hours")
+            if deleted_count > 0:
+                logger.info(f"[QUEUE] Cleared {deleted_count} completed messages")
             return deleted_count

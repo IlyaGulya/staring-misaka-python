@@ -73,5 +73,16 @@ async def main():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+    # Configure logging with a cleaner format
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+    )
+
+    # Reduce verbosity of third-party libraries
+    logging.getLogger('telethon').setLevel(logging.WARNING)
+    logging.getLogger('anthropic').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
+
     asyncio.run(main())

@@ -42,9 +42,9 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
 
     @client.on(events.ChatAction(chats=config.tracking_chat_ids))
     async def chat_action_handler(event):
-        logger.info(f"Chat action event received: {event}")
+        logger.debug(f"Chat action event received for chat {event.chat_id}")
         if event.chat_id not in config.tracking_chat_ids:
-            logger.info(f"Ignoring event from non-tracked chat: {event.chat_id}")
+            logger.debug(f"Ignoring event from non-tracked chat: {event.chat_id}")
             return
 
         with session_factory() as session:
@@ -63,43 +63,42 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                     return
 
             if not bot_enabled:
-                logger.info(f"Bot is disabled for chat {event.chat_id}, ignoring event")
+                logger.debug(f"Bot is disabled for chat {event.chat_id}, ignoring event")
                 return
 
             # Check if a user has joined or been added to the group
             if (event.user_added or event.user_joined) and isinstance(event.original_update, UpdateChannelParticipant):
                 user_id = event.user.id
-                logger.info(f"User {user_id} was added to the group {event.chat_id}")
+                logger.info(f"[NEW USER] user_id={user_id} chat_id={event.chat_id}")
 
                 try:
                     # Check if user is pre-approved
                     approved_user = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
                     if approved_user:
-                        logger.info(f"User {user_id} is pre-approved, skipping monitoring")
+                        logger.debug(f"User {user_id} is pre-approved, skipping monitoring")
                         return
 
                     # Check if the user already exists in the new_users table
                     existing_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=event.chat_id).first()
 
                     if existing_user:
-                        logger.info(f"User {user_id} already exists in NewUser table. Updating join time.")
+                        logger.debug(f"User {user_id} already exists, updating join time")
                         existing_user.join_time = datetime.now(UTC)
                     else:
-                        logger.info(f"Adding new user {user_id} to NewUser table")
+                        logger.debug(f"Adding user {user_id} to monitoring")
                         new_user = NewUser(user_id=user_id, chat_id=event.chat_id, join_time=datetime.now(UTC))
                         session.add(new_user)
 
                     session.commit()
-                    logger.info(f"Successfully updated/added user {user_id} in NewUser table")
                 except SQLAlchemyError as e:
-                    logger.error(f"Error updating/adding user {user_id} to NewUser table: {str(e)}")
+                    logger.error(f"Database error adding user {user_id}: {str(e)}")
                     session.rollback()
             else:
-                logger.info("Ignoring non-user-added event or non-UpdateChannelParticipant event")
+                logger.debug("Ignoring non-user-added event")
 
     @client.on(events.NewMessage(chats=config.tracking_chat_ids))
     async def message_handler(event):
-        logger.info(f"New message event received: {event}")
+        logger.debug(f"New message in chat {event.chat_id}")
 
         with session_factory() as session:
             # Check if bot is enabled for this chat
@@ -117,17 +116,17 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                     return
 
             if not bot_enabled:
-                logger.info(f"Bot is disabled for chat {event.chat_id}, ignoring message")
+                logger.debug(f"Bot disabled for chat {event.chat_id}, ignoring message")
                 return
 
             sender = await event.get_sender()
-            logger.info(f"Message sender: {sender.id}")
+            logger.debug(f"Message from user {sender.id}")
 
             try:
                 # Check if sender is pre-approved
                 approved_user = session.query(ApprovedUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
                 if approved_user:
-                    logger.info(f"Message from pre-approved user {sender.id}, ignoring")
+                    logger.debug(f"Message from pre-approved user {sender.id}, ignoring")
                     return
 
                 # Check if sender is in the new_users table
@@ -139,7 +138,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                 try:
                     approved_user = session.query(ApprovedUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
                     if approved_user:
-                        logger.info(f"Message from pre-approved user {sender.id}, ignoring")
+                        logger.debug(f"Message from pre-approved user {sender.id}, ignoring")
                         return
                     new_user = session.query(NewUser).filter_by(user_id=sender.id, chat_id=event.chat_id).first()
                 except SQLAlchemyError as retry_error:
@@ -147,9 +146,8 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                     session.rollback()
                     return
             if new_user:
-                logger.info(f"Processing message from new user {sender.id}")
                 message_text = event.raw_text
-                logger.info(f"Message text: {message_text}")
+                logger.info(f"[MONITORING] user_id={sender.id} chat_id={event.chat_id} message='{message_text[:50]}...'")
 
                 # Add message to queue for processing instead of direct spam check
                 if client.queue_processor:
@@ -159,13 +157,13 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                         message_id=event.id,
                         message_text=message_text
                     )
-                    logger.info(f"Added message from user {sender.id} to processing queue")
+                    logger.debug(f"Queued message from user {sender.id}")
                 else:
                     logger.warning("Queue processor not available, falling back to direct spam check")
                     # Fallback to direct spam check if queue processor is not available
                     try:
                         is_spam = await llm.is_spam(message_text)
-                        logger.info(f"Spam check result for user {sender.id}: {is_spam}")
+                        logger.debug(f"Spam check result for user {sender.id}: {is_spam}")
 
                         admin_settings = session.query(AdminSettings).first()
 
@@ -189,17 +187,17 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                     except Exception as e:
                         logger.error(f"Error in fallback spam check for user {sender.id}: {str(e)}")
             else:
-                logger.info(f"Message from existing user {sender.id}, ignoring")
+                logger.debug(f"Message from existing user {sender.id}, ignoring")
 
     @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/approve'))
     async def approve_command_handler(event):
         # Only allow admin to use this command
         if event.sender_id != config.admin_id:
-            logger.info(f"Non-admin user {event.sender_id} tried to use /approve command")
+            logger.debug(f"Non-admin user {event.sender_id} tried to use /approve command")
             await event.reply("Don't touch me, baka!")
             return
 
-        logger.info(f"Admin {event.sender_id} used /approve command in group chat {event.chat_id}")
+        logger.info(f"[ADMIN] /approve command in chat {event.chat_id}")
 
         parts = event.raw_text.split()
         if len(parts) < 2:
@@ -220,11 +218,11 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
     async def unapprove_command_handler(event):
         # Only allow admin to use this command
         if event.sender_id != config.admin_id:
-            logger.info(f"Non-admin user {event.sender_id} tried to use /unapprove command")
+            logger.debug(f"Non-admin user {event.sender_id} tried to use /unapprove command")
             await event.reply("Don't touch me, baka!")
             return
 
-        logger.info(f"Admin {event.sender_id} used /unapprove command in group chat {event.chat_id}")
+        logger.info(f"[ADMIN] /unapprove command in chat {event.chat_id}")
 
         parts = event.raw_text.split()
         if len(parts) < 2:
@@ -245,11 +243,11 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
     async def toggle_bot_command_handler(event):
         # Only allow admin to use this command
         if event.sender_id != config.admin_id:
-            logger.info(f"Non-admin user {event.sender_id} tried to use /toggle_bot command")
+            logger.debug(f"Non-admin user {event.sender_id} tried to use /toggle_bot command")
             await event.reply("Don't touch me, baka!")
             return
 
-        logger.info(f"Admin {event.sender_id} used /toggle_bot command in group chat {event.chat_id}")
+        logger.info(f"[ADMIN] /toggle_bot command in chat {event.chat_id}")
 
         with session_factory() as session:
             # Get or create group settings for this chat
@@ -266,13 +264,13 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
 
             status_text = "enabled" if group_settings.enabled else "disabled"
             await event.reply(f"Bot is now {status_text} in this group.")
-            logger.info(f"Bot {status_text} for chat {event.chat_id}")
+            logger.info(f"[CONFIG] Bot {status_text} for chat {event.chat_id}")
 
     @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/(toggle_approval|status|queue_status|retry_failed|clear_completed)'))
     async def admin_commands_group_handler(event):
         # Only allow admin to use these commands in group chats
         if event.sender_id != config.admin_id:
-            logger.info(f"Non-admin user {event.sender_id} tried to use admin command: {event.raw_text}")
+            logger.debug(f"Non-admin user {event.sender_id} tried to use admin command: {event.raw_text}")
             await event.reply("Don't touch me, baka!")
             return
 
@@ -281,14 +279,14 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
 
     async def notify_admin(sender, message_text, event, session: Session):
         """Notify admin about potential spam. Session must be provided."""
-        logger.info(f"Notifying admin about potential spam from user {sender.id}")
+        logger.info(f"[SPAM] Requesting admin approval for user_id={sender.id} chat_id={event.chat_id}")
         # Send a message to the admin
         admin_message = (
             f"User {sender.first_name} ({sender.id}) sent a message in chat {event.chat_id}:\n\n"
             f"{message_text}\n\nShould I ban this user? Reply 'yes' to ban."
         )
         sent_message = await client.send_message(config.admin_id, admin_message)
-        logger.info(f"Sent admin notification message with ID: {sent_message.id}")
+        logger.debug(f"Admin notification sent with message ID: {sent_message.id}")
         # Store the pending request in the database
         pending_request = PendingBanRequest(
             admin_message_id=sent_message.id,
@@ -300,11 +298,12 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
         )
         session.add(pending_request)
         session.commit()  # Must commit here so admin_reply_handler can see it in a different session
-        logger.info(f"Added pending ban request for user {sender.id} to database")
+        logger.debug(f"Pending ban request stored for user {sender.id}")
 
     async def process_ban(user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool, session: Session):
         """Process a ban for a user. Session must be provided."""
-        logger.info(f"{'Automatically banning' if is_automatic else 'Admin approved ban for'} user {user_id}")
+        ban_type = "automatic" if is_automatic else "manual"
+        logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
 
         # Send the ban command
         reason = f"autoban by staring misaka. message: {message_text}"
@@ -326,7 +325,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
             session.delete(new_user)
 
         session.commit()
-        logger.info(f"Stored ban information for user {user_id}")
+        logger.debug(f"Ban information stored for user {user_id}")
 
         # Notify admin about the ban
         admin_message = (
@@ -339,7 +338,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
 
     @client.on(events.NewMessage(chats=[config.admin_id], from_users=[config.admin_id]))
     async def admin_reply_handler(event):
-        logger.info(f"Received message from admin: {event}")
+        logger.debug(f"Received message from admin")
 
         with session_factory() as session:
             if event.raw_text.startswith('/'):
@@ -388,9 +387,9 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                     admin_message_id=event.reply_to_msg_id
                 ).first()
                 if pending_request:
-                    logger.info(f"Processing admin reply for pending ban request: {pending_request.sender_id}")
+                    logger.debug(f"Processing admin reply for ban request: user {pending_request.sender_id}")
                     if event.raw_text.strip().lower() == 'yes':
-                        logger.info(f"Admin approved ban for user {pending_request.sender_id}")
+                        logger.info(f"[ADMIN] Ban approved for user_id={pending_request.sender_id}")
 
                         await process_ban(
                             user_id=pending_request.sender_id,
@@ -404,9 +403,9 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                         # Remove the pending request from the database
                         session.delete(pending_request)
                         session.commit()
-                        logger.info(f"Removed pending ban request for user {pending_request.sender_id} from database")
+                        logger.debug(f"Pending ban request removed for user {pending_request.sender_id}")
                     else:
-                        logger.info(f"Admin did not approve ban for user {pending_request.sender_id}")
+                        logger.info(f"[ADMIN] Ban rejected for user_id={pending_request.sender_id}")
                         await client.send_message(
                             config.admin_id, f"No action taken against user {pending_request.sender_id}."
                         )
@@ -414,7 +413,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                         session.delete(pending_request)
                         session.commit()
                 else:
-                    logger.info("Admin reply does not correspond to a pending ban request")
+                    logger.debug("Admin reply not for a pending ban request")
             else:
                 # Existing code for processing non-reply messages from admin
                 is_spam = await llm.is_spam(event.raw_text)
@@ -438,7 +437,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                     logger.warning(f"Could not fetch user entity by username {username}: {str(e)}")
                     # Try to find user in database by searching for username in stored data
                     # This is a fallback - we'll search by user_id if possible from database
-                    logger.info(f"Attempting database fallback for username {username}")
+                    logger.debug(f"Attempting database fallback for username {username}")
                     return None  # Username fallback is complex, require user_id for approval
             else:
                 # Assume it's a user ID
@@ -451,7 +450,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                         logger.warning(f"Could not fetch user entity by ID {user_id}: {str(e)}")
                         # Continue with approval using just the user_id - entity fetching failed but we can still approve
                         user_name = f"User_{user_id}"  # Fallback name
-                        logger.info(f"Using fallback name for user {user_id}")
+                        logger.debug(f"Using fallback name for user {user_id}")
                 except ValueError:
                     logger.error(f"Invalid user ID format: {user_identifier}")
                     return None
@@ -465,7 +464,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
             if new_user:
                 session.delete(new_user)
                 removed_count = 1
-                logger.info(f"Removed user {user_id} from monitoring in chat {target_chat_id}")
+                logger.debug(f"Removed user {user_id} from monitoring in chat {target_chat_id}")
 
             # Add user to approved users list for the specific chat only
             existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=target_chat_id).first()
@@ -474,17 +473,14 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                 approved_user = ApprovedUser(user_id=user_id, chat_id=target_chat_id, approved_at=datetime.now(UTC))
                 session.add(approved_user)
                 approved_count = 1
-                logger.info(f"Added user {user_id} to approved list for chat {target_chat_id}")
+                logger.debug(f"Added user {user_id} to approved list for chat {target_chat_id}")
 
             if removed_count > 0 or approved_count > 0:
                 session.commit()
-                if removed_count > 0:
-                    logger.info(f"User {user_id} removed from monitoring in chat {target_chat_id}")
-                if approved_count > 0:
-                    logger.info(f"User {user_id} added to approved list for chat {target_chat_id}")
+                logger.info(f"[APPROVE] user_id={user_id} chat_id={target_chat_id}")
                 return {"id": user_id, "name": user_name}
             else:
-                logger.info(f"User {user_id} was already approved for chat {target_chat_id}")
+                logger.debug(f"User {user_id} was already approved for chat {target_chat_id}")
                 return {"id": user_id, "name": user_name}
 
         except Exception as e:
@@ -507,7 +503,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                     user_name = user.username if user.username else user.first_name
                 except Exception as e:
                     logger.warning(f"Could not fetch user entity by username {username}: {str(e)}")
-                    logger.info(f"Attempting database fallback for username {username}")
+                    logger.debug(f"Attempting database fallback for username {username}")
                     return None  # Username fallback is complex, require user_id for removal
             else:
                 # Assume it's a user ID
@@ -520,7 +516,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                         logger.warning(f"Could not fetch user entity by ID {user_id}: {str(e)}")
                         # Continue with removal using just the user_id - entity fetching failed but we can still remove
                         user_name = f"User_{user_id}"  # Fallback name
-                        logger.info(f"Using fallback name for user {user_id}")
+                        logger.debug(f"Using fallback name for user {user_id}")
                 except ValueError:
                     logger.error(f"Invalid user ID format: {user_identifier}")
                     return None
@@ -533,10 +529,10 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
             if approved_user:
                 session.delete(approved_user)
                 session.commit()
-                logger.info(f"Removed user {user_id} from approved list for chat {target_chat_id}")
+                logger.info(f"[UNAPPROVE] user_id={user_id} chat_id={target_chat_id}")
                 return {"id": user_id, "name": user_name}
             else:
-                logger.info(f"User {user_id} was not in approved list for chat {target_chat_id}")
+                logger.debug(f"User {user_id} was not in approved list for chat {target_chat_id}")
                 return None
 
         except Exception as e:
@@ -561,17 +557,17 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
         if new_user:
             # Remove from monitoring
             session.delete(new_user)
-            logger.info(f"User {user_id} removed from monitoring in chat {chat_id}")
+            logger.debug(f"User {user_id} removed from monitoring in chat {chat_id}")
 
             # Add to approved users list
             existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
             if not existing_approval:
                 approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now(UTC))
                 session.add(approved_user)
-                logger.info(f"User {user_id} auto-approved and added to approved list for chat {chat_id}")
+                logger.debug(f"User {user_id} added to approved list for chat {chat_id}")
 
             session.commit()
-            logger.info(f"User {user_id} has been automatically approved after passing spam check")
+            logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
 
     logger.info("Bot setup complete")
     # Expose handlers for tests to call directly without poking into Telethon internals.

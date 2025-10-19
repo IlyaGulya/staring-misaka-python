@@ -9,15 +9,15 @@ class UserBot:
     def __init__(self, config):
         self.config = config
         self.client = TelegramClient(config.userbot_session_path, config.api_id, config.api_hash)
-        logger.info("UserBot client initialized")
+        logger.debug("UserBot client initialized")
 
     async def start(self):
         await self.client.start()
-        logger.info("UserBot started")
+        logger.debug("UserBot started")
 
     async def stop(self):
         await self.client.disconnect()
-        logger.info("UserBot stopped")
+        logger.debug("UserBot stopped")
 
     async def send_ban_command(self, chat_id: int, message_id: int, reason: str):
         try:
@@ -26,7 +26,7 @@ class UserBot:
                 message=f'/sban {reason}',
                 reply_to=message_id
             )
-            logger.info(f"Ban command sent for message {message_id} in chat {chat_id}")
+            logger.debug(f"Ban command sent for message {message_id} in chat {chat_id}")
         except Exception as e:
             logger.error(f"Error sending ban command: {str(e)}")
 
