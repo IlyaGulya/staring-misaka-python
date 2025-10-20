@@ -48,9 +48,9 @@ class TestTelegramHandlerRollback:
         return event
 
     @pytest.fixture
-    def bot_with_handlers(self, session_factory, mock_llm, mock_userbot, test_config):
+    def bot_with_handlers(self, session_factory, mock_llm, test_config):
         """Create a bot with all handlers registered"""
-        bot = create_bot(session_factory, mock_llm, mock_userbot, test_config)
+        bot = create_bot(session_factory, mock_llm, test_config)
         return bot
 
     @pytest.mark.asyncio
@@ -121,9 +121,9 @@ class TestQueueProcessorRollback:
     """Test error handling with rollback in QueueProcessor"""
 
     @pytest.fixture
-    def queue_processor(self, session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config):
+    def queue_processor(self, session_factory, mock_llm, mock_telegram_client, test_config):
         """Create a QueueProcessor instance"""
-        return QueueProcessor(session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config)
+        return QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
 
     @pytest.mark.asyncio
     async def test_add_message_to_queue_with_database_lock_error(
@@ -318,13 +318,11 @@ class TestConcurrentDatabaseAccess:
         # Create processors
         mock_llm1 = AsyncMock()
         mock_llm2 = AsyncMock()
-        mock_userbot1 = AsyncMock()
-        mock_userbot2 = AsyncMock()
         mock_client1 = AsyncMock()
         mock_client2 = AsyncMock()
 
-        processor1 = QueueProcessor(SessionFactory, mock_llm1, mock_userbot1, mock_client1, test_config)
-        processor2 = QueueProcessor(SessionFactory, mock_llm2, mock_userbot2, mock_client2, test_config)
+        processor1 = QueueProcessor(SessionFactory, mock_llm1, mock_client1, test_config)
+        processor2 = QueueProcessor(SessionFactory, mock_llm2, mock_client2, test_config)
 
         # Concurrently add messages
         async def add_messages(processor, start_id):
@@ -440,9 +438,9 @@ class TestCrossHandlerContamination:
     """Test that database errors in one handler don't affect other handlers"""
 
     @pytest.fixture
-    def bot_with_handlers(self, session_factory, mock_llm, mock_userbot, test_config):
+    def bot_with_handlers(self, session_factory, mock_llm, test_config):
         """Create a bot with all handlers registered"""
-        bot = create_bot(session_factory, mock_llm, mock_userbot, test_config)
+        bot = create_bot(session_factory, mock_llm, test_config)
         return bot
 
     @pytest.mark.asyncio
@@ -512,13 +510,13 @@ class TestCrossHandlerContamination:
 
     @pytest.mark.asyncio
     async def test_queue_insert_failure_does_not_contaminate_session(
-        self, session_factory, test_session, test_config, mock_llm, mock_userbot, mock_telegram_client
+        self, session_factory, test_session, test_config, mock_llm, mock_telegram_client
     ):
         """
         Test that queue processor INSERT failure doesn't leave session in bad state
         for subsequent operations
         """
-        processor = QueueProcessor(session_factory, mock_llm, mock_userbot, mock_telegram_client, test_config)
+        processor = QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
 
         # Step 1: Cause INSERT to fail
         original_commit = test_session.commit

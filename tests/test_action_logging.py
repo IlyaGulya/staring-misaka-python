@@ -7,7 +7,7 @@ from db import MessageQueue, NewUser, AdminSettings
 
 
 @pytest.mark.asyncio
-async def test_spam_autoban_logs_to_group_channel(test_session, mock_llm, mock_telegram_client, test_config):
+async def test_spam_autoban_logs_to_group_channel(session_factory, test_session, mock_llm, mock_telegram_client, test_config):
     """QueueProcessor should log its actions to the configured log channel per group."""
     # Setup: automatic ban (no approval)
     admin_settings = test_session.query(AdminSettings).first()
@@ -34,8 +34,8 @@ async def test_spam_autoban_logs_to_group_channel(test_session, mock_llm, mock_t
     mock_telegram_client.get_entity = AsyncMock(return_value=mock_user)
     mock_telegram_client.get_messages = AsyncMock(return_value=[])
 
-    processor = QueueProcessor(test_session, mock_llm, mock_telegram_client, test_config)
-    await processor._process_message(queue_item)
+    processor = QueueProcessor(session_factory, mock_llm, mock_telegram_client, test_config)
+    await processor._process_message(queue_item, test_session)
 
     # Check we logged to the mapped channel or admin DM
     log_channel = test_config.log_channel_map.get(67890, test_config.admin_id)
