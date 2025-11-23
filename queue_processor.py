@@ -106,6 +106,7 @@ class QueueProcessor:
             
     async def _process_message_by_id(self, message_id: int):
         """Process a message by its ID, using a fresh session"""
+        # Fetch message data first, then close session before long operations
         with self._get_session() as process_session:
             # Fetch the message
             queue_item = process_session.query(MessageQueue).filter_by(id=message_id).first()
@@ -118,160 +119,194 @@ class QueueProcessor:
                 logger.debug(f"Message {message_id} already being processed or completed")
                 return
 
-            await self._process_message(queue_item, process_session)
-    
-    async def _process_message(self, queue_item: MessageQueue, session: Session):
-        """Process a message from the queue. Session must be provided."""
-        logger.debug(f"Processing queue item {queue_item.id} for user {queue_item.user_id}")
+            # Extract data we need before closing session
+            user_id = queue_item.user_id
+            chat_id = queue_item.chat_id
+            message_text = queue_item.message_text
 
-        # Mark as processing
-        queue_item.status = 'processing'
-        queue_item.retry_count += 1
-        session.commit()
+        # Process message WITHOUT holding database session open
+        await self._process_message(message_id, user_id, chat_id, message_text)
+    
+    async def _process_message(self, message_id: int, user_id: int, chat_id: int, message_text: str):
+        """Process a message from the queue. Creates its own sessions to avoid holding locks."""
+        logger.debug(f"Processing queue item {message_id} for user {user_id}")
 
         try:
-            # Check if bot is enabled for this chat
-            group_settings = session.query(GroupSettings).filter_by(chat_id=queue_item.chat_id).first()
-            if group_settings and not group_settings.enabled:
-                logger.debug(f"Bot disabled for chat {queue_item.chat_id}, skipping queue item")
-                queue_item.status = 'completed'
-                queue_item.processed_at = datetime.now(UTC)
-                queue_item.error_message = "Bot disabled for this chat"
+            # Mark as processing (quick database operation)
+            with self._get_session() as session:
+                queue_item = session.query(MessageQueue).filter_by(id=message_id).first()
+                if not queue_item:
+                    logger.debug(f"Message {message_id} not found")
+                    return
+
+                queue_item.status = 'processing'
+                queue_item.retry_count += 1
                 session.commit()
-                return
 
-            # Check if user is still being monitored
-            new_user = session.query(NewUser).filter_by(
-                user_id=queue_item.user_id,
-                chat_id=queue_item.chat_id
-            ).first()
+            # Check conditions (quick database reads)
+            with self._get_session() as session:
+                # Check if bot is enabled for this chat
+                group_settings = session.query(GroupSettings).filter_by(chat_id=chat_id).first()
+                if group_settings and not group_settings.enabled:
+                    logger.debug(f"Bot disabled for chat {chat_id}, skipping queue item")
+                    # Update status and exit
+                    with self._get_session() as update_session:
+                        queue_item = update_session.query(MessageQueue).filter_by(id=message_id).first()
+                        if queue_item:
+                            queue_item.status = 'completed'
+                            queue_item.processed_at = datetime.now(UTC)
+                            queue_item.error_message = "Bot disabled for this chat"
+                            update_session.commit()
+                    return
 
-            if not new_user:
-                logger.debug(f"User {queue_item.user_id} no longer monitored, skipping")
-                queue_item.status = 'completed'
-                queue_item.processed_at = datetime.now(UTC)
-                session.commit()
-                return
+                # Check if user is still being monitored
+                new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+                if not new_user:
+                    logger.debug(f"User {user_id} no longer monitored, skipping")
+                    with self._get_session() as update_session:
+                        queue_item = update_session.query(MessageQueue).filter_by(id=message_id).first()
+                        if queue_item:
+                            queue_item.status = 'completed'
+                            queue_item.processed_at = datetime.now(UTC)
+                            update_session.commit()
+                    return
 
-            # Check if user is pre-approved
-            approved_user = session.query(ApprovedUser).filter_by(
-                user_id=queue_item.user_id,
-                chat_id=queue_item.chat_id
-            ).first()
+                # Check if user is pre-approved
+                approved_user = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+                if approved_user:
+                    logger.debug(f"User {user_id} is pre-approved, skipping")
+                    with self._get_session() as update_session:
+                        queue_item = update_session.query(MessageQueue).filter_by(id=message_id).first()
+                        if queue_item:
+                            queue_item.status = 'completed'
+                            queue_item.processed_at = datetime.now(UTC)
+                            update_session.commit()
+                    return
 
-            if approved_user:
-                logger.debug(f"User {queue_item.user_id} is pre-approved, skipping")
-                queue_item.status = 'completed'
-                queue_item.processed_at = datetime.now(UTC)
-                session.commit()
-                return
-
-            # Perform spam check
-            logger.debug(f"Running spam check for user {queue_item.user_id}")
-            is_spam = await self.llm.is_spam(queue_item.message_text)
+            # Perform spam check WITHOUT holding database session
+            logger.debug(f"Running spam check for user {user_id}")
+            is_spam = await self.llm.is_spam(message_text)
 
             # Update queue item with result
-            queue_item.spam_result = is_spam
-            queue_item.status = 'completed'
-            queue_item.processed_at = datetime.now(UTC)
-            queue_item.error_message = None
+            with self._get_session() as session:
+                queue_item = session.query(MessageQueue).filter_by(id=message_id).first()
+                if queue_item:
+                    queue_item.spam_result = is_spam
+                    queue_item.status = 'completed'
+                    queue_item.processed_at = datetime.now(UTC)
+                    queue_item.error_message = None
+                    session.commit()
 
             if is_spam:
-                logger.info(f"[SPAM] Detected from user_id={queue_item.user_id} chat_id={queue_item.chat_id}")
+                logger.info(f"[SPAM] Detected from user_id={user_id} chat_id={chat_id}")
             else:
-                logger.debug(f"Not spam: user {queue_item.user_id}")
-            
+                logger.debug(f"Not spam: user {user_id}")
+
             # Process the spam result
-            await self._handle_spam_result(queue_item, is_spam, session)
-            
-            session.commit()
-            
+            await self._handle_spam_result(message_id, user_id, chat_id, message_text, is_spam)
+
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Error processing queue item {queue_item.id}: {error_msg}")
+            logger.error(f"Error processing queue item {message_id}: {error_msg}")
 
             # Update queue item with error
-            queue_item.error_message = error_msg
-            queue_item.status = 'failed'
+            with self._get_session() as session:
+                queue_item = session.query(MessageQueue).filter_by(id=message_id).first()
+                if queue_item:
+                    queue_item.error_message = error_msg
+                    queue_item.status = 'failed'
 
-            # Calculate next retry time with exponential backoff
-            backoff_seconds = min(300, 30 * (2 ** (queue_item.retry_count - 1)))  # Max 5 minutes
-            queue_item.next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
+                    # Calculate next retry time with exponential backoff
+                    backoff_seconds = min(300, 30 * (2 ** (queue_item.retry_count - 1)))  # Max 5 minutes
+                    queue_item.next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
 
-            logger.warning(f"Will retry message {queue_item.id} in {backoff_seconds}s (attempt {queue_item.retry_count}/{queue_item.max_retries})")
-
-            session.commit()
+                    logger.warning(f"Will retry message {message_id} in {backoff_seconds}s (attempt {queue_item.retry_count}/{queue_item.max_retries})")
+                    session.commit()
             
-    async def _handle_spam_result(self, queue_item: MessageQueue, is_spam: bool, session: Session):
-        """Handle the result of spam detection. Session must be provided."""
+    async def _handle_spam_result(self, message_id: int, user_id: int, chat_id: int, message_text: str, is_spam: bool):
+        """Handle the result of spam detection. Creates its own sessions."""
         if is_spam:
-            admin_settings = session.query(AdminSettings).first()
+            # Check admin settings
+            with self._get_session() as session:
+                admin_settings = session.query(AdminSettings).first()
+                require_approval = admin_settings.require_approval if admin_settings else False
 
-            if admin_settings.require_approval:
+            if require_approval:
                 # Notify admin
-                await self._notify_admin(queue_item, session)
-                await self._log(queue_item.chat_id, f"🚩 Potential spam by `{queue_item.user_id}` queued for admin review.")
+                await self._notify_admin(message_id, user_id, chat_id, message_text)
+                await self._log(chat_id, f"🚩 Potential spam by `{user_id}` queued for admin review.")
             else:
                 # Automatically ban the user
                 await self._process_ban(
-                    user_id=queue_item.user_id,
-                    chat_id=queue_item.chat_id,
-                    message_id=queue_item.message_id,
-                    message_text=queue_item.message_text,
-                    is_automatic=True,
-                    session=session
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    message_text=message_text,
+                    is_automatic=True
                 )
         else:
             # If not spam, approve the user
-            await self._auto_approve_user(queue_item.user_id, queue_item.chat_id, session)
-            await self._log(queue_item.chat_id, f"✅ User `{queue_item.user_id}` auto-approved (message passed spam check).")
+            await self._auto_approve_user(user_id, chat_id)
+            await self._log(chat_id, f"✅ User `{user_id}` auto-approved (message passed spam check).")
             
-    async def _notify_admin(self, queue_item: MessageQueue, session: Session):
-        """Notify admin about potential spam. Session must be provided."""
-        logger.info(f"[SPAM] Requesting admin approval for user_id={queue_item.user_id} chat_id={queue_item.chat_id}")
+    async def _notify_admin(self, message_id: int, user_id: int, chat_id: int, message_text: str):
+        """Notify admin about potential spam. Creates its own session."""
+        logger.info(f"[SPAM] Requesting admin approval for user_id={user_id} chat_id={chat_id}")
 
         try:
             # Get user name
-            user_name = await self._get_user_name(queue_item.user_id)
+            user_name = await self._get_user_name(user_id)
 
             admin_message = (
-                f"User {user_name} ({queue_item.user_id}) sent a message in chat {queue_item.chat_id}:\n\n"
-                f"{queue_item.message_text}\n\nShould I ban this user? Reply 'yes' to ban."
+                f"User {user_name} ({user_id}) sent a message in chat {chat_id}:\n\n"
+                f"{message_text}\n\nShould I ban this user? Reply 'yes' to ban."
             )
             sent_message = await self.telegram_client.send_message(self.config.admin_id, admin_message)
             logger.debug(f"Admin notification sent with message ID: {sent_message.id}")
 
             # Store the pending request in the database
-            pending_request = PendingBanRequest(
-                admin_message_id=sent_message.id,
-                sender_id=queue_item.user_id,
-                original_chat_id=queue_item.chat_id,
-                original_message_id=queue_item.message_id,
-                message_text=queue_item.message_text,
-                created_at=datetime.now(UTC)
-            )
-            session.add(pending_request)
-            logger.debug(f"Pending ban request stored for user {queue_item.user_id}")
-            
+            with self._get_session() as session:
+                pending_request = PendingBanRequest(
+                    admin_message_id=sent_message.id,
+                    sender_id=user_id,
+                    original_chat_id=chat_id,
+                    original_message_id=message_id,
+                    message_text=message_text,
+                    created_at=datetime.now(UTC)
+                )
+                session.add(pending_request)
+                session.commit()
+                logger.debug(f"Pending ban request stored for user {user_id}")
+
         except Exception as e:
-            logger.error(f"Error notifying admin about user {queue_item.user_id}: {str(e)}")
+            logger.error(f"Error notifying admin about user {user_id}: {str(e)}")
             raise
             
-    async def _process_ban(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool, session: Session):
-        """Process a ban for a user. Session must be provided."""
+    async def _process_ban(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool):
+        """Process a ban for a user. Creates its own session."""
         ban_type = "automatic" if is_automatic else "manual"
         logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
 
-        try:
-            # Ban via bot admin rights
-            await self._ban_user_via_bot(chat_id, user_id)
+        errors = []
 
-            # Purge recent messages from the user
+        # Step 1: Ban via bot admin rights (CRITICAL - must succeed)
+        try:
+            await self._ban_user_via_bot(chat_id, user_id)
+        except Exception as e:
+            logger.error(f"Error banning user {user_id}: {str(e)}")
+            errors.append(f"ban: {str(e)}")
+
+        # Step 2: Purge recent messages from the user (OPTIONAL - can fail)
+        try:
             purge_n = self.config.default_purge_count
             await self._purge_user_messages(chat_id, user_id, purge_n)
+        except Exception as e:
+            logger.warning(f"Error purging messages for user {user_id}: {str(e)}")
+            errors.append(f"purge: {str(e)}")
 
-            # Store the ban information in the database
-            user_name = await self._get_user_name(user_id)
+        # Step 3: Store the ban information in the database (always do this)
+        user_name = await self._get_user_name(user_id)
+        with self._get_session() as session:
             banned_user = BannedUser(
                 user_id=user_id,
                 user_name=user_name,
@@ -286,19 +321,34 @@ class QueueProcessor:
             if new_user:
                 session.delete(new_user)
 
+            session.commit()
             logger.debug(f"Ban information stored for user {user_id}")
 
-            # Notify admin about the ban
+        # Step 4: Notify admin about the ban (OPTIONAL - can fail)
+        try:
+            status_msg = ""
+            if errors:
+                status_msg = f"\n⚠️ Warnings: {', '.join(errors)}"
+
             admin_message = (
                 f"User {user_id} has been {'automatically ' if is_automatic else ''}banned "
-                f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
+                f"{'due to spam detection' if is_automatic else 'as per admin approval'}.{status_msg}"
             )
             await self.telegram_client.send_message(self.config.admin_id, admin_message)
-            await self._log(chat_id, f"🔨 Banned `{user_id}` and purged last {self.config.default_purge_count} messages.")
-
         except Exception as e:
-            logger.error(f"Error processing ban for user {user_id}: {str(e)}")
-            raise
+            logger.warning(f"Failed to notify admin about ban: {e}")
+            errors.append(f"admin_notification: {str(e)}")
+
+        # Step 5: Log to channel (OPTIONAL - can fail)
+        try:
+            await self._log(chat_id, f"🔨 Banned `{user_id}` and purged last {self.config.default_purge_count} messages.")
+        except Exception as e:
+            logger.warning(f"Failed to log ban action: {e}")
+            errors.append(f"logging: {str(e)}")
+
+        # Only raise if the actual ban failed (not purge or logging)
+        if any("ban:" in err for err in errors):
+            raise Exception(f"Ban failed: {errors}")
 
     async def _ban_user_via_bot(self, chat_id: int, user_id: int):
         """Apply ban using bot's admin rights."""
@@ -308,26 +358,28 @@ class QueueProcessor:
         """Delete recent N messages from the user in the chat."""
         await purge_user_messages(self.telegram_client, chat_id, user_id, count)
             
-    async def _auto_approve_user(self, user_id: int, chat_id: int, session: Session):
-        """Auto-approve a user who passed spam check. Session must be provided."""
+    async def _auto_approve_user(self, user_id: int, chat_id: int):
+        """Auto-approve a user who passed spam check. Creates its own session."""
         logger.debug(f"Auto-approving user {user_id} in chat {chat_id}")
 
         try:
-            # Remove from monitoring
-            new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
-            if new_user:
-                session.delete(new_user)
-                logger.debug(f"User {user_id} removed from monitoring")
+            with self._get_session() as session:
+                # Remove from monitoring
+                new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+                if new_user:
+                    session.delete(new_user)
+                    logger.debug(f"User {user_id} removed from monitoring")
 
-            # Add to approved users list
-            existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
-            if not existing_approval:
-                approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now(UTC))
-                session.add(approved_user)
-                logger.debug(f"User {user_id} added to approved list")
+                # Add to approved users list
+                existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+                if not existing_approval:
+                    approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now(UTC))
+                    session.add(approved_user)
+                    logger.debug(f"User {user_id} added to approved list")
 
-            logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
-                
+                session.commit()
+                logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
+
         except Exception as e:
             logger.error(f"Error auto-approving user {user_id}: {str(e)}")
             raise

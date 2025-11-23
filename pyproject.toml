@@ -35,7 +35,8 @@ test-unit = "pytest tests/test_message_queue_model.py tests/test_queue_processor
 test-integration = "pytest tests/test_telegram_integration.py -v"
 test-errors = "pytest tests/test_error_handling.py -v"
 test-admin = "pytest tests/test_admin_commands.py -v"
-test-coverage = "pytest tests/ --cov=. --cov-report=html --cov-report=term"
+test-coverage = "pytest tests/ --cov=. --cov-report=html --cov-report=term-missing --cov-fail-under=90"
+test-e2e = "pytest tests/test_e2e_telegram.py -v -m e2e"
 migrate = "alembic upgrade head"
 migrate-auto = "alembic revision --autogenerate"
 migrate-downgrade = "alembic downgrade -1"
@@ -47,3 +48,26 @@ start = "python main.py"
 
 [tool.hatch.build.targets.wheel]
 include = ["*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+    "-s",  # Never capture output
+    "--capture=no",  # Disable all capturing
+]
+markers = [
+    "asyncio: marks tests as async (deselect with '-m \"not asyncio\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "e2e: marks tests as end-to-end integration tests (deselect with '-m \"not e2e\"')",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

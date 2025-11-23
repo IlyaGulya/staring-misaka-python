@@ -1,10 +1,26 @@
-{
-  "permissions": {
-    "deny": [
-      "Read(**/.env*)",
-      "Edit(**/.env*)",
-      "MultiEdit(**/.env*)",
-      "Write(**/.env*)"
-    ]
+  {
+    "permissions": {
+      "allow": [
+        "Read(**/.env*.example)",
+        "Edit(**/.env*.example)",
+        "Write(**/.env*.example)"
+      ],
+      "deny": [
+        "Read(**/.env)",
+        "Edit(**/.env)",
+        "Write(**/.env)",
+        "Read(**/.env.test)",
+        "Edit(**/.env.test)",
+        "Write(**/.env.test)",
+        "Read(**/.env.local)",
+        "Edit(**/.env.local)",
+        "Write(**/.env.local)",
+        "Read(**/.env.production)",
+        "Edit(**/.env.production)",
+        "Write(**/.env.production)",
+        "Read(**/.env.development)",
+        "Edit(**/.env.development)",
+        "Write(**/.env.development)"
+      ]
+    }
   }
-}

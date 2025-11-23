@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, UTC
+from typing import Optional
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -14,25 +15,42 @@ from moderation import ban_user, purge_user_messages
 logger = logging.getLogger(__name__)
 
 
-def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClient:
+def create_bot(session_factory: sessionmaker, llm: Llm, config, *, client: Optional[TelegramClient] = None) -> TelegramClient:
     """Create a Telegram bot client.
 
     Args:
         session_factory: SQLAlchemy sessionmaker for creating database sessions
         llm: LLM instance
         config: Configuration object
+        client: Optional pre-configured TelegramClient. If provided, handlers are registered
+               on this instance. Otherwise, a new TelegramClient is created.
 
     Returns:
         TelegramClient: Configured Telegram bot client
     """
-    client = TelegramClient(config.bot_session_path, config.api_id, config.api_hash)
-    logger.info("Creating Telegram bot client")
+    client = client or TelegramClient(config.bot_session_path, config.api_id, config.api_hash)
+    logger.info(f"Creating Telegram bot client (is_connected={client.is_connected()}, tracking_chats={config.tracking_chat_ids})")
+
+    # Guard against re-registering handlers on the same client (important for E2E tests)
+    if hasattr(client, '_misaka_handlers_registered'):
+        logger.info("Handlers already registered on this client, skipping registration")
+        client.queue_processor = None  # Reset queue processor reference
+        # Update config for the current test (E2E tests use function-scoped configs)
+        client._misaka_config = config
+        logger.info(f"Updated client config with tracking_chat_ids={config.tracking_chat_ids}")
+        return client
+
+    # Mark that we're registering handlers
+    client._misaka_handlers_registered = True
+
+    # Store config on client for dynamic access in handlers
+    client._misaka_config = config
 
     # Initialize queue processor reference (will be set later)
     client.queue_processor = None
 
     def _log_dest(chat_id: int) -> int:
-        return config.log_channel_map.get(chat_id, config.admin_id)
+        return client._misaka_config.log_channel_map.get(chat_id, client._misaka_config.admin_id)
 
     async def _log(chat_id: int, text: str):
         try:
@@ -48,11 +66,40 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
         # Default to enabled if no settings exist yet
         return True
 
-    @client.on(events.ChatAction(chats=config.tracking_chat_ids))
+    # Debug: Log ALL updates to see what we're receiving
+    @client.on(events.Raw)
+    async def raw_update_logger(update):
+        from telethon.tl.types import UpdateChannelParticipant, UpdateChannel
+        update_type = type(update).__name__
+
+        # Extract chat_id from various update types
+        chat_id = None
+        if hasattr(update, 'chat_id'):
+            chat_id = update.chat_id
+        elif hasattr(update, 'peer'):
+            peer = update.peer
+            if hasattr(peer, 'channel_id'):
+                chat_id = -1000000000000 - peer.channel_id
+        elif hasattr(update, 'channel_id'):
+            chat_id = -1000000000000 - update.channel_id
+
+        # Log all updates, with extra detail for participant updates
+        if isinstance(update, UpdateChannelParticipant):
+            logger.info(f"[RAW_UPDATE] ⭐⭐⭐ UpdateChannelParticipant for chat_id={chat_id}, user_id={update.user_id}")
+            logger.info(f"[RAW_UPDATE] prev_participant={type(update.prev_participant).__name__}, new_participant={type(update.new_participant).__name__}")
+            logger.info(f"[RAW_UPDATE] Full update: {update}")
+        elif isinstance(update, UpdateChannel):
+            logger.debug(f"[RAW_UPDATE] UpdateChannel for chat_id={chat_id}")
+        else:
+            logger.debug(f"[RAW_UPDATE] {update_type} for chat_id={chat_id}")
+
+    @client.on(events.ChatAction())
     async def chat_action_handler(event):
-        logger.debug(f"Chat action event received for chat {event.chat_id}")
-        if event.chat_id not in config.tracking_chat_ids:
-            logger.debug(f"Ignoring event from non-tracked chat: {event.chat_id}")
+        logger.info(f"[CHAT_ACTION] ⭐⭐⭐ Chat action event received for chat {event.chat_id}, user_added={event.user_added}, user_joined={event.user_joined}, update_type={type(event.original_update).__name__}")
+        logger.info(f"[CHAT_ACTION] Event details: user={event.user}, action_message={event.action_message}")
+        logger.debug(f"[CHAT_ACTION_DEBUG] Full event: {event}")
+        if event.chat_id not in client._misaka_config.tracking_chat_ids:
+            logger.debug(f"Ignoring event from non-tracked chat: {event.chat_id}, tracking: {client._misaka_config.tracking_chat_ids}")
             return
 
         with session_factory() as session:
@@ -105,8 +152,12 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
             else:
                 logger.debug("Ignoring non-user-added event")
 
-    @client.on(events.NewMessage(chats=config.tracking_chat_ids))
+    @client.on(events.NewMessage())
     async def message_handler(event):
+        # Check if this chat is being tracked
+        if event.chat_id not in client._misaka_config.tracking_chat_ids:
+            return
+
         logger.debug(f"New message in chat {event.chat_id}")
 
         with session_factory() as session:
@@ -200,10 +251,14 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
                 logger.debug(f"Message from existing user {sender.id}, ignoring")
 
     # === Rose-like ban command (/sban) directly from the bot ===
-    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/(sban|ban)(?:\s+(.+))?'))
+    @client.on(events.NewMessage(pattern=r'^/(sban|ban)(?:\s+(.+))?'))
     async def sban_command_handler(event):
+        # Check if this chat is being tracked
+        if event.chat_id not in client._misaka_config.tracking_chat_ids:
+            return
+
         # Only admin allowed
-        if event.sender_id != config.admin_id:
+        if event.sender_id != client._misaka_config.admin_id:
             await event.reply("Don't touch me, baka!")
             return
         # Resolve target & N
@@ -241,16 +296,49 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
         try:
             await _ban_user_via_bot(event.chat_id, target)
             await _purge_user_messages(event.chat_id, target, n)
+
+            # Record the ban in the database
+            with session_factory() as session:
+                # Create banned user record
+                user_name = await get_user_name(target)
+                banned_user = BannedUser(
+                    user_id=target,
+                    user_name=user_name,
+                    chat_id=event.chat_id,
+                    message_text=f"Manual ban via /sban command (purged {n} messages)",
+                    banned_at=datetime.now(UTC)
+                )
+                session.add(banned_user)
+
+                # Remove from NewUser table if present
+                new_user = session.query(NewUser).filter_by(user_id=target, chat_id=event.chat_id).first()
+                if new_user:
+                    session.delete(new_user)
+                    logger.debug(f"Removed user {target} from monitoring after /sban")
+
+                # Remove from ApprovedUser table if present
+                approved_user = session.query(ApprovedUser).filter_by(user_id=target, chat_id=event.chat_id).first()
+                if approved_user:
+                    session.delete(approved_user)
+                    logger.debug(f"Removed user {target} from approved list after /sban")
+
+                session.commit()
+                logger.info(f"[SBAN] Recorded ban for user_id={target} chat_id={event.chat_id}")
+
             await event.reply(f"Banned `{target}` and purged last {n} messages.")
             await _log(event.chat_id, f"🔨 `/sban` by admin. Banned `{target}`; purged {n} messages.")
         except Exception as e:
             await event.reply(f"Ban/purge failed: {e}")
             await _log(event.chat_id, f"⚠️ `/sban` failed for `{target}`: {e}")
 
-    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/approve'))
+    @client.on(events.NewMessage(pattern=r'^/approve'))
     async def approve_command_handler(event):
+        # Check if this chat is being tracked
+        if event.chat_id not in client._misaka_config.tracking_chat_ids:
+            return
+
         # Only allow admin to use this command
-        if event.sender_id != config.admin_id:
+        if event.sender_id != client._misaka_config.admin_id:
             logger.debug(f"Non-admin user {event.sender_id} tried to use /approve command")
             await event.reply("Don't touch me, baka!")
             return
@@ -272,10 +360,14 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
         else:
             await event.reply("User not found in monitoring list or error occurred.")
 
-    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/unapprove'))
+    @client.on(events.NewMessage(pattern=r'^/unapprove'))
     async def unapprove_command_handler(event):
+        # Check if this chat is being tracked
+        if event.chat_id not in client._misaka_config.tracking_chat_ids:
+            return
+
         # Only allow admin to use this command
-        if event.sender_id != config.admin_id:
+        if event.sender_id != client._misaka_config.admin_id:
             logger.debug(f"Non-admin user {event.sender_id} tried to use /unapprove command")
             await event.reply("Don't touch me, baka!")
             return
@@ -297,10 +389,14 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
         else:
             await event.reply("User not found in approved list or error occurred.")
 
-    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/toggle_bot'))
+    @client.on(events.NewMessage(pattern=r'^/toggle_bot'))
     async def toggle_bot_command_handler(event):
+        # Check if this chat is being tracked
+        if event.chat_id not in client._misaka_config.tracking_chat_ids:
+            return
+
         # Only allow admin to use this command
-        if event.sender_id != config.admin_id:
+        if event.sender_id != client._misaka_config.admin_id:
             logger.debug(f"Non-admin user {event.sender_id} tried to use /toggle_bot command")
             await event.reply("Don't touch me, baka!")
             return
@@ -324,10 +420,14 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
             await event.reply(f"Bot is now {status_text} in this group.")
             logger.info(f"[CONFIG] Bot {status_text} for chat {event.chat_id}")
 
-    @client.on(events.NewMessage(chats=config.tracking_chat_ids, pattern=r'^/(toggle_approval|status|queue_status|retry_failed|clear_completed)'))
+    @client.on(events.NewMessage(pattern=r'^/(toggle_approval|status|queue_status|retry_failed|clear_completed)'))
     async def admin_commands_group_handler(event):
+        # Check if this chat is being tracked
+        if event.chat_id not in client._misaka_config.tracking_chat_ids:
+            return
+
         # Only allow admin to use these commands in group chats
-        if event.sender_id != config.admin_id:
+        if event.sender_id != client._misaka_config.admin_id:
             logger.debug(f"Non-admin user {event.sender_id} tried to use admin command: {event.raw_text}")
             await event.reply("Don't touch me, baka!")
             return
@@ -343,7 +443,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
             f"User {sender.first_name} ({sender.id}) sent a message in chat {event.chat_id}:\n\n"
             f"{message_text}\n\nShould I ban this user? Reply 'yes' to ban."
         )
-        sent_message = await client.send_message(config.admin_id, admin_message)
+        sent_message = await client.send_message(client._misaka_config.admin_id, admin_message)
         logger.debug(f"Admin notification sent with message ID: {sent_message.id}")
         # Store the pending request in the database
         pending_request = PendingBanRequest(
@@ -365,7 +465,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
 
         # Ban with bot and purge messages (Rose-like)
         await _ban_user_via_bot(chat_id, user_id)
-        await _purge_user_messages(chat_id, user_id, config.default_purge_count)
+        await _purge_user_messages(chat_id, user_id, client._misaka_config.default_purge_count)
 
         # Store the ban information in the database
         banned_user = BannedUser(
@@ -390,18 +490,42 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
             f"User {user_id} has been {'automatically ' if is_automatic else ''}banned "
             f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
         )
-        await client.send_message(config.admin_id, admin_message)
-        await _log(chat_id, f"🔨 Banned `{user_id}` and purged last {config.default_purge_count} messages.")
+        logger.info(f"[PROCESS_BAN] Attempting to send ban notification to admin {client._misaka_config.admin_id}")
+        logger.info(f"[PROCESS_BAN] Admin message: {admin_message}")
+
+        try:
+            sent_message = await client.send_message(client._misaka_config.admin_id, admin_message)
+            logger.info(f"[PROCESS_BAN] ✓ Ban notification sent successfully to admin, message_id={sent_message.id}")
+        except Exception as e:
+            logger.error(f"[PROCESS_BAN] ✗ Failed to send ban notification to admin: {e}", exc_info=True)
+            # Try to get more details about the peer
+            try:
+                peer_info = await client.get_entity(client._misaka_config.admin_id)
+                logger.error(f"[PROCESS_BAN] Admin peer info: {peer_info}")
+            except Exception as peer_error:
+                logger.error(f"[PROCESS_BAN] Could not get admin peer info: {peer_error}")
+
+        await _log(chat_id, f"🔨 Banned `{user_id}` and purged last {client._misaka_config.default_purge_count} messages.")
 
         return banned_user
 
-    @client.on(events.NewMessage(chats=[config.admin_id], from_users=[config.admin_id]))
+    @client.on(events.NewMessage())
     async def admin_reply_handler(event):
-        logger.debug(f"Received message from admin")
+        # Only handle messages in admin private chat
+        if event.chat_id != client._misaka_config.admin_id or event.sender_id != client._misaka_config.admin_id:
+            return
+
+        logger.info(f"[ADMIN_REPLY] Received message from admin: text='{event.raw_text}', reply_to={event.reply_to_msg_id}, chat_id={event.chat_id}")
 
         with session_factory() as session:
             if event.raw_text.startswith('/'):
                 command = event.raw_text.lower().split()[0]
+                logger.debug(f"Processing command: {command}")
+
+                # Skip /start - let the dedicated handler handle it
+                if command == '/start':
+                    logger.debug("Skipping /start in admin_reply_handler - will be handled by start_handler")
+                    return
                 if command == '/toggle_approval':
                     admin_settings = session.query(AdminSettings).first()
                     admin_settings.require_approval = not admin_settings.require_approval
@@ -441,13 +565,24 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
                 else:
                     await event.reply("Unknown command. Available commands: /toggle_approval, /status, /queue_status, /retry_failed, /clear_completed")
             elif event.reply_to_msg_id:
-                # Check if this is a reply to our pending ban request
-                pending_request = session.query(PendingBanRequest).filter_by(
-                    admin_message_id=event.reply_to_msg_id
-                ).first()
-                if pending_request:
-                    logger.debug(f"Processing admin reply for ban request: user {pending_request.sender_id}")
-                    if event.raw_text.strip().lower() == 'yes':
+                # Admin is replying to a message
+                # Note: In private chats, message IDs are different for each participant,
+                # so we can't rely on admin_message_id matching event.reply_to_msg_id.
+                # Instead, we look for any pending ban requests and process them based on the reply content.
+                logger.info(f"[ADMIN_REPLY] Message is a reply to message ID: {event.reply_to_msg_id}")
+
+                reply_text = event.raw_text.strip().lower()
+
+                # Get all pending ban requests (there should typically be only one)
+                all_pending = session.query(PendingBanRequest).all()
+                logger.info(f"[ADMIN_REPLY] Found {len(all_pending)} pending ban request(s)")
+
+                if all_pending and reply_text in ['yes', 'no']:
+                    # Process the most recent pending request
+                    pending_request = all_pending[0]  # Get the first (oldest) request
+                    logger.info(f"[ADMIN_REPLY] Processing pending request for user {pending_request.sender_id}, admin replied: '{reply_text}'")
+
+                    if reply_text == 'yes':
                         logger.info(f"[ADMIN] Ban approved for user_id={pending_request.sender_id}")
 
                         await process_ban(
@@ -462,21 +597,24 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
                         # Remove the pending request from the database
                         session.delete(pending_request)
                         session.commit()
-                        logger.debug(f"Pending ban request removed for user {pending_request.sender_id}")
-                    else:
+                        logger.info(f"[ADMIN_REPLY] Pending ban request removed for user {pending_request.sender_id}")
+                    else:  # 'no'
                         logger.info(f"[ADMIN] Ban rejected for user_id={pending_request.sender_id}")
                         await client.send_message(
-                            config.admin_id, f"No action taken against user {pending_request.sender_id}."
+                            client._misaka_config.admin_id, f"No action taken against user {pending_request.sender_id}."
                         )
                         # Remove the pending request from the database
                         session.delete(pending_request)
                         session.commit()
                 else:
-                    logger.debug("Admin reply not for a pending ban request")
+                    if not all_pending:
+                        logger.info(f"[ADMIN_REPLY] No pending ban requests found in database")
+                    else:
+                        logger.info(f"[ADMIN_REPLY] Reply text '{reply_text}' is not 'yes' or 'no', ignoring")
             else:
                 # Existing code for processing non-reply messages from admin
                 is_spam = await llm.is_spam(event.raw_text)
-                await client.send_message(config.admin_id, f"Is spam: {is_spam}")
+                await client.send_message(client._misaka_config.admin_id, f"Is spam: {is_spam}")
 
     async def approve_user(user_identifier: str, target_chat_id: int, session: Session):
         """Approve a user for a chat. Session must be provided."""
@@ -635,7 +773,29 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
             logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
             await _log(chat_id, f"✅ Auto-approved `{user_id}` after passing spam check.")
 
-    logger.info("Bot setup complete")
+    @client.on(events.NewMessage(pattern=r'^/start'))
+    async def start_handler(event):
+        """Handle /start command to establish peer relationships"""
+        logger.debug(f"Received /start command from user {event.sender_id}")
+        if event.sender_id == client._misaka_config.admin_id:
+            # Admin starting conversation - show helpful message
+            await event.reply(
+                "Staring Misaka is watching.\n\n"
+                "Admin commands:\n"
+                "• /status - Check approval settings\n"
+                "• /toggle_approval - Toggle admin approval requirement\n"
+                "• /queue_status - View message queue status\n"
+                "• /retry_failed - Retry failed queue items\n"
+                "• /clear_completed - Clear completed queue items"
+            )
+        else:
+            # Regular user - simple greeting
+            await event.reply("Hello! I'm a spam detection bot.")
+        raise events.StopPropagation()
+
+    # Log registered handlers
+    num_handlers = len(client.list_event_handlers())
+    logger.info(f"Bot setup complete ({num_handlers} event handlers registered)")
     # Expose handlers for tests to call directly without poking into Telethon internals.
     # This is inert in production and simplifies unit/integration tests.
     client._handlers = {
@@ -647,6 +807,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, config) -> TelegramClien
         "toggle_bot_command_handler": toggle_bot_command_handler,
         "admin_commands_group_handler": admin_commands_group_handler,
         "admin_reply_handler": admin_reply_handler,
+        "start_handler": start_handler,
         # expose helpers used by handlers when convenient to assert on behavior
         "_ban_user_via_bot": _ban_user_via_bot,
         "_purge_user_messages": _purge_user_messages,

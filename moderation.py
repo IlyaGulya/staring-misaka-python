@@ -33,7 +33,11 @@ async def ban_user(client, chat_id: int, user_id: int):
         pin_messages=True,
     )
     try:
-        await client(EditBannedRequest(chat_id, user_id, rights))
+        # Resolve entities explicitly before making API calls
+        # This is critical for E2E tests where entity cache may be empty
+        channel_entity = await client.get_input_entity(chat_id)
+        user_entity = await client.get_input_entity(user_id)
+        await client(EditBannedRequest(channel_entity, user_entity, rights))
     except Exception as e:
         # Fallback for basic groups
         try:
@@ -45,6 +49,9 @@ async def ban_user(client, chat_id: int, user_id: int):
 async def purge_user_messages(client, chat_id: int, user_id: int, count: int):
     """Delete the most recent N messages from a user in a chat.
 
+    Bot-compatible version that iterates through recent messages
+    instead of using the restricted SearchRequest API.
+
     Args:
         client: Telethon client instance
         chat_id: Chat ID where messages should be deleted
@@ -52,9 +59,24 @@ async def purge_user_messages(client, chat_id: int, user_id: int, count: int):
         count: Number of most recent messages to delete
     """
     try:
-        msgs = await client.get_messages(chat_id, from_user=user_id, limit=count)
-        ids = [m.id for m in msgs]
-        if ids:
-            await client.delete_messages(chat_id, ids, revoke=True)
+        # Resolve chat entity explicitly before iteration
+        # This ensures the entity is cached for iter_messages and delete_messages
+        chat_entity = await client.get_input_entity(chat_id)
+
+        # Use iter_messages without from_user filter (bot-compatible)
+        # Then manually filter by user_id
+        message_ids = []
+
+        # Iterate through recent messages (bots can do this)
+        # We fetch more than needed since we'll filter by user
+        async for message in client.iter_messages(chat_entity, limit=count * 10):
+            if message.sender_id == user_id:
+                message_ids.append(message.id)
+                if len(message_ids) >= count:
+                    break
+
+        if message_ids:
+            await client.delete_messages(chat_entity, message_ids, revoke=True)
+            logger.info(f"Purged {len(message_ids)} messages from user {user_id} in chat {chat_id}")
     except Exception as e:
         logger.warning(f"Failed to purge messages for user {user_id} in {chat_id}: {e}")
