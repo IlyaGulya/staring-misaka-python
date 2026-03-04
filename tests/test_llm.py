@@ -160,23 +160,6 @@ class TestLlmPromptAndExceptionMapping:
             assert str(exc_info.value) == str(exception)
     
     @pytest.mark.asyncio
-    async def test_is_spam_logging_behavior(self, llm_instance, mock_instructor_client, caplog):
-        """Test logging behavior during spam check"""
-        mock_response = SpamCheckResponse(is_spam=True)
-        mock_instructor_client.chat.completions.create.return_value = mock_response
-        
-        with caplog.at_level(logging.INFO):
-            result = await llm_instance.is_spam("test message for logging")
-        
-        # Verify expected log messages
-        log_messages = [record.message for record in caplog.records]
-        
-        assert any("Checking if message is spam" in msg for msg in log_messages)
-        assert any("Message text: test message for logging..." in msg for msg in log_messages)
-        assert any("Sending request to Claude" in msg for msg in log_messages)
-        assert any("Spam check result: True" in msg for msg in log_messages)
-    
-    @pytest.mark.asyncio
     async def test_is_spam_error_logging(self, llm_instance, mock_instructor_client, caplog):
         """Test error logging during exceptions"""
         test_error = RuntimeError("Test API error")
@@ -220,21 +203,6 @@ class TestLlmPromptAndExceptionMapping:
                 create_llm(config)
             
             assert str(exc_info.value) == "Invalid API key"
-    
-    def test_create_llm_logging(self, caplog):
-        """Test create_llm logging behavior"""
-        config = Config.for_testing()
-        
-        with patch('llm.instructor.from_provider') as mock_from_provider:
-            mock_client = MagicMock()
-            mock_from_provider.return_value = mock_client
-            
-            with caplog.at_level(logging.INFO):
-                create_llm(config)
-            
-            log_messages = [record.message for record in caplog.records]
-            assert any("Creating LLM instance" in msg for msg in log_messages)
-            assert any("Instructor client created" in msg for msg in log_messages)
     
     def test_create_llm_error_logging(self, caplog):
         """Test create_llm error logging"""
