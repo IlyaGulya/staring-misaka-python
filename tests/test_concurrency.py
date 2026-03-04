@@ -361,13 +361,16 @@ class TestQueueProcessorConcurrency:
         session.close()
 
     @pytest.mark.asyncio
-    async def test_slow_llm_does_not_block_database_for_other_operations(self, shared_db_config):
-        """Test that a slow LLM call does NOT hold a database session open,
-        allowing other database operations to proceed concurrently.
+    async def test_no_open_sessions_during_llm_call(self, shared_db_config):
+        """Test that NO database sessions are open while LLM is_spam() is running.
 
-        This is the core scenario that caused the original 'database is locked' bug:
-        _process_message held a session open while awaiting llm.is_spam() (1-3 sec),
-        which blocked all other database access (busy_timeout exceeded → bot crash).
+        This is the core invariant that prevents the 'database is locked' bug:
+        the old code held a session open across `await llm.is_spam()` (1-3 sec),
+        which meant SQLite's synchronous busy_timeout would block the entire
+        asyncio event loop when another handler tried to write.
+
+        We instrument the session factory to track open sessions and verify
+        that zero sessions are open at the moment is_spam() is called.
         """
         from db import make_session_factory, initialize_database
 
@@ -381,155 +384,87 @@ class TestQueueProcessorConcurrency:
             user_id=9000,
             chat_id=shared_db_config.tracking_chat_ids[0],
             message_id=9001,
-            message_text="Slow LLM test message",
+            message_text="Session leak test message",
             status='pending'
         )
         session.add(msg)
         new_user = NewUser(user_id=9000, chat_id=shared_db_config.tracking_chat_ids[0])
         session.add(new_user)
         session.commit()
-        msg_id = msg.id
-
-        # LLM will take 0.5s to respond — simulating real-world latency
-        llm_started = asyncio.Event()
-        llm_can_finish = asyncio.Event()
-
-        mock_llm = AsyncMock()
-
-        async def slow_llm(text):
-            llm_started.set()
-            await llm_can_finish.wait()  # Block until test lets it finish
-            return False
-
-        mock_llm.is_spam.side_effect = slow_llm
-        mock_userbot = AsyncMock()
-        mock_telegram_client = AsyncMock()
-
-        processor = QueueProcessor(
-            SessionFactory, mock_llm, mock_userbot, mock_telegram_client,
-            shared_db_config, processing_delay=0.005
-        )
-
-        # Start the processor — it will pick up the message and call slow LLM
-        processor_task = asyncio.create_task(processor.start())
-
-        # Wait for the LLM call to start (session should be released by now)
-        await asyncio.wait_for(llm_started.wait(), timeout=2.0)
-
-        # NOW try to do a database write from a separate session.
-        # If the old code held the session open across the LLM await,
-        # this would block/timeout with "database is locked".
-        db_write_succeeded = False
-
-        async def concurrent_db_write():
-            nonlocal db_write_succeeded
-            write_session = SessionFactory()
-            try:
-                another_user = NewUser(user_id=9999, chat_id=shared_db_config.tracking_chat_ids[0])
-                write_session.add(another_user)
-                write_session.commit()
-                db_write_succeeded = True
-            finally:
-                write_session.close()
-
-        # This should complete quickly (< 1 sec) if sessions are not held across awaits
-        await asyncio.wait_for(concurrent_db_write(), timeout=1.0)
-
-        assert db_write_succeeded, "Database write was blocked while LLM was processing — session leak!"
-
-        # Let the LLM finish
-        llm_can_finish.set()
-
-        # Wait for processor to finish processing
-        await wait_for_condition(
-            lambda: SessionFactory().query(MessageQueue).filter_by(id=msg_id, status='completed').first() is not None,
-            timeout=2.0,
-            poll_interval=0.01,
-            description="message to be completed"
-        )
-
-        # Stop processor
-        processor.stop()
-        await asyncio.gather(processor_task, return_exceptions=True)
-
         session.close()
 
-    @pytest.mark.asyncio
-    async def test_slow_llm_with_concurrent_message_insertion(self, shared_db_config):
-        """Test that add_message_to_queue works while LLM is processing.
+        # Track open sessions via instrumented factory
+        open_sessions = set()
+        sessions_open_during_llm = []
 
-        This verifies the fix for the production scenario where:
-        1. Processor is awaiting llm.is_spam() for message A
-        2. A new message B arrives and message_handler calls add_message_to_queue()
-        3. add_message_to_queue must NOT be blocked by the LLM session
-        """
-        from db import make_session_factory, initialize_database
+        original_factory = SessionFactory
 
-        SessionFactory = make_session_factory(shared_db_config)
-        initialize_database(SessionFactory, shared_db_config)
+        class TrackedSession:
+            """Wrapper that tracks session open/close lifecycle."""
+            def __init__(self, real_session, session_id):
+                self._real = real_session
+                self._id = session_id
+                open_sessions.add(session_id)
 
-        session = SessionFactory()
+            def __getattr__(self, name):
+                return getattr(self._real, name)
 
-        # Add initial message and user
-        msg = MessageQueue(
-            user_id=8000,
-            chat_id=shared_db_config.tracking_chat_ids[0],
-            message_id=8001,
-            message_text="First message",
-            status='pending'
-        )
-        session.add(msg)
-        new_user = NewUser(user_id=8000, chat_id=shared_db_config.tracking_chat_ids[0])
-        session.add(new_user)
-        session.commit()
+            def __enter__(self):
+                self._real.__enter__()
+                return self
 
-        # Slow LLM with barrier
-        llm_started = asyncio.Event()
+            def __exit__(self, *args):
+                open_sessions.discard(self._id)
+                return self._real.__exit__(*args)
+
+            def close(self):
+                open_sessions.discard(self._id)
+                self._real.close()
+
+        session_counter = [0]
+
+        def tracking_factory():
+            session_counter[0] += 1
+            sid = session_counter[0]
+            return TrackedSession(original_factory(), sid)
+
+        # LLM records how many sessions are open when it's called
+        llm_called = asyncio.Event()
         llm_can_finish = asyncio.Event()
 
         mock_llm = AsyncMock()
 
-        async def slow_llm(text):
-            llm_started.set()
+        async def instrumented_llm(text):
+            # Record snapshot of open sessions at the moment LLM is called
+            sessions_open_during_llm.append(len(open_sessions))
+            llm_called.set()
             await llm_can_finish.wait()
             return False
 
-        mock_llm.is_spam.side_effect = slow_llm
+        mock_llm.is_spam.side_effect = instrumented_llm
         mock_userbot = AsyncMock()
         mock_telegram_client = AsyncMock()
 
         processor = QueueProcessor(
-            SessionFactory, mock_llm, mock_userbot, mock_telegram_client,
+            tracking_factory, mock_llm, mock_userbot, mock_telegram_client,
             shared_db_config, processing_delay=0.005
         )
 
         # Start processor
         processor_task = asyncio.create_task(processor.start())
 
-        # Wait for LLM to be called (= session should be released)
-        await asyncio.wait_for(llm_started.wait(), timeout=2.0)
+        # Wait for LLM to be called
+        await asyncio.wait_for(llm_called.wait(), timeout=2.0)
 
-        # Insert a new message while LLM is "thinking"
-        # This is exactly what message_handler does when a new message arrives
-        result = await asyncio.wait_for(
-            processor.add_message_to_queue(
-                user_id=8000,
-                chat_id=shared_db_config.tracking_chat_ids[0],
-                message_id=8002,
-                message_text="Second message while LLM is busy"
-            ),
-            timeout=1.0
+        # THE KEY ASSERTION: no sessions should be open when LLM is called
+        assert len(sessions_open_during_llm) > 0, "LLM was never called"
+        assert sessions_open_during_llm[0] == 0, (
+            f"Found {sessions_open_during_llm[0]} open session(s) during LLM call! "
+            f"Sessions must be closed before awaiting LLM to prevent database locking."
         )
 
-        assert result is not None, "add_message_to_queue was blocked by LLM processing!"
-        assert result.message_text == "Second message while LLM is busy"
-
-        # Let LLM finish
+        # Let LLM finish and clean up
         llm_can_finish.set()
-
-        # Stop processor
         await asyncio.sleep(0.1)
         processor.stop()
         await asyncio.gather(processor_task, return_exceptions=True)
-
-        session.close()
