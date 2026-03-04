@@ -172,7 +172,7 @@ def sample_new_user(new_user_factory):
 def mock_queue_processor():
     """Mock queue processor for testing"""
     mock = MagicMock()
-    mock.add_message_to_queue = MagicMock()
+    mock.add_message_to_queue = AsyncMock()
     mock.get_queue_status = MagicMock(return_value={
         'pending': 0,
         'processing': 0,

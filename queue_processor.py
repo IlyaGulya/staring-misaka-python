@@ -37,7 +37,7 @@ class QueueProcessor:
     def _get_session(self) -> Session:
         """Create a new session for database operations"""
         return self.session_factory()
-        
+
     async def start(self):
         self.running = True
         logger.info("[QUEUE] Processor started")
@@ -53,7 +53,7 @@ class QueueProcessor:
     def stop(self):
         self.running = False
         logger.info("[QUEUE] Processor stopped")
-        
+
     async def _process_pending_messages(self):
         now = datetime.now(UTC)
 
@@ -95,37 +95,49 @@ class QueueProcessor:
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-            
+
     async def _process_message_by_id(self, message_id: int):
         """Process a message by its ID, using a fresh session"""
-        with self._get_session() as process_session:
-            # Fetch the message
-            queue_item = process_session.query(MessageQueue).filter_by(id=message_id).first()
+        # Phase 1: DB read — fetch and validate
+        with self._get_session() as session:
+            queue_item = session.query(MessageQueue).filter_by(id=message_id).first()
             if not queue_item:
                 logger.debug(f"Message {message_id} not found or already processed")
                 return
 
-            # Check if already being processed (should be 'claimed' from selection phase)
             if queue_item.status not in ['claimed', 'pending', 'failed']:
                 logger.debug(f"Message {message_id} already being processed or completed")
                 return
 
-            await self._process_message(queue_item, process_session)
-    
-    async def _process_message(self, queue_item: MessageQueue, session: Session):
-        """Process a message from the queue. Session must be provided."""
-        logger.debug(f"Processing queue item {queue_item.id} for user {queue_item.user_id}")
+            # Extract data we need before closing session
+            item_id = queue_item.id
+            item_user_id = queue_item.user_id
+            item_chat_id = queue_item.chat_id
+            item_message_id = queue_item.message_id
+            item_message_text = queue_item.message_text
+            item_retry_count = queue_item.retry_count
 
-        # Mark as processing
-        queue_item.status = 'processing'
-        queue_item.retry_count += 1
-        session.commit()
+        await self._process_message(item_id, item_user_id, item_chat_id, item_message_id, item_message_text, item_retry_count)
 
-        try:
+    async def _process_message(self, item_id: int, user_id: int, chat_id: int, message_id: int, message_text: str, retry_count: int):
+        """Process a message from the queue. No session held across awaits."""
+        logger.debug(f"Processing queue item {item_id} for user {user_id}")
+
+        # Phase 1: DB reads + mark as processing
+        with self._get_session() as session:
+            queue_item = session.query(MessageQueue).filter_by(id=item_id).first()
+            if not queue_item:
+                return
+
+            # Mark as processing
+            queue_item.status = 'processing'
+            queue_item.retry_count = retry_count + 1
+            session.commit()
+
             # Check if bot is enabled for this chat
-            group_settings = session.query(GroupSettings).filter_by(chat_id=queue_item.chat_id).first()
+            group_settings = session.query(GroupSettings).filter_by(chat_id=chat_id).first()
             if group_settings and not group_settings.enabled:
-                logger.debug(f"Bot disabled for chat {queue_item.chat_id}, skipping queue item")
+                logger.debug(f"Bot disabled for chat {chat_id}, skipping queue item")
                 queue_item.status = 'completed'
                 queue_item.processed_at = datetime.now(UTC)
                 queue_item.error_message = "Bot disabled for this chat"
@@ -134,12 +146,12 @@ class QueueProcessor:
 
             # Check if user is still being monitored
             new_user = session.query(NewUser).filter_by(
-                user_id=queue_item.user_id,
-                chat_id=queue_item.chat_id
+                user_id=user_id,
+                chat_id=chat_id
             ).first()
 
             if not new_user:
-                logger.debug(f"User {queue_item.user_id} no longer monitored, skipping")
+                logger.debug(f"User {user_id} no longer monitored, skipping")
                 queue_item.status = 'completed'
                 queue_item.processed_at = datetime.now(UTC)
                 session.commit()
@@ -147,118 +159,128 @@ class QueueProcessor:
 
             # Check if user is pre-approved
             approved_user = session.query(ApprovedUser).filter_by(
-                user_id=queue_item.user_id,
-                chat_id=queue_item.chat_id
+                user_id=user_id,
+                chat_id=chat_id
             ).first()
 
             if approved_user:
-                logger.debug(f"User {queue_item.user_id} is pre-approved, skipping")
+                logger.debug(f"User {user_id} is pre-approved, skipping")
                 queue_item.status = 'completed'
                 queue_item.processed_at = datetime.now(UTC)
                 session.commit()
                 return
 
-            # Perform spam check
-            logger.debug(f"Running spam check for user {queue_item.user_id}")
-            is_spam = await self.llm.is_spam(queue_item.message_text)
+            # Read admin settings for later use
+            admin_settings = session.query(AdminSettings).first()
+            require_approval = admin_settings.require_approval if admin_settings else False
 
-            # Update queue item with result
-            queue_item.spam_result = is_spam
-            queue_item.status = 'completed'
-            queue_item.processed_at = datetime.now(UTC)
-            queue_item.error_message = None
-
-            if is_spam:
-                logger.info(f"[SPAM] Detected from user_id={queue_item.user_id} chat_id={queue_item.chat_id}")
-            else:
-                logger.debug(f"Not spam: user {queue_item.user_id}")
-            
-            # Process the spam result
-            await self._handle_spam_result(queue_item, is_spam, session)
-            
-            session.commit()
-            
+        # Phase 2: Async I/O — no session held
+        try:
+            logger.debug(f"Running spam check for user {user_id}")
+            is_spam = await self.llm.is_spam(message_text)
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Error processing queue item {queue_item.id}: {error_msg}")
+            logger.error(f"Error processing queue item {item_id}: {error_msg}")
 
-            # Update queue item with error
-            queue_item.error_message = error_msg
-            queue_item.status = 'failed'
+            # Phase 3 (error): DB write
+            with self._get_session() as session:
+                queue_item = session.query(MessageQueue).filter_by(id=item_id).first()
+                if queue_item:
+                    queue_item.error_message = error_msg
+                    queue_item.status = 'failed'
+                    backoff_seconds = min(300, 30 * (2 ** (queue_item.retry_count - 1)))
+                    queue_item.next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
+                    logger.warning(f"Will retry message {item_id} in {backoff_seconds}s (attempt {queue_item.retry_count}/{queue_item.max_retries})")
+                    session.commit()
+            return
 
-            # Calculate next retry time with exponential backoff
-            backoff_seconds = min(300, 30 * (2 ** (queue_item.retry_count - 1)))  # Max 5 minutes
-            queue_item.next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
-
-            logger.warning(f"Will retry message {queue_item.id} in {backoff_seconds}s (attempt {queue_item.retry_count}/{queue_item.max_retries})")
-
-            session.commit()
-            
-    async def _handle_spam_result(self, queue_item: MessageQueue, is_spam: bool, session: Session):
-        """Handle the result of spam detection. Session must be provided."""
+        # Phase 3: DB write + handle result
         if is_spam:
-            admin_settings = session.query(AdminSettings).first()
-            
-            if admin_settings.require_approval:
-                # Notify admin
-                await self._notify_admin(queue_item, session)
+            logger.info(f"[SPAM] Detected from user_id={user_id} chat_id={chat_id}")
+        else:
+            logger.debug(f"Not spam: user {user_id}")
+
+        with self._get_session() as session:
+            queue_item = session.query(MessageQueue).filter_by(id=item_id).first()
+            if queue_item:
+                queue_item.spam_result = is_spam
+                queue_item.status = 'completed'
+                queue_item.processed_at = datetime.now(UTC)
+                queue_item.error_message = None
+                session.commit()
+
+        # Handle spam result (each helper opens its own session)
+        try:
+            await self._handle_spam_result(user_id, chat_id, message_id, message_text, is_spam, require_approval)
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error handling spam result for queue item {item_id}: {error_msg}")
+            with self._get_session() as session:
+                queue_item = session.query(MessageQueue).filter_by(id=item_id).first()
+                if queue_item:
+                    queue_item.error_message = error_msg
+                    queue_item.status = 'failed'
+                    backoff_seconds = min(300, 30 * (2 ** (queue_item.retry_count - 1)))
+                    queue_item.next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
+                    session.commit()
+
+    async def _handle_spam_result(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_spam: bool, require_approval: bool):
+        """Handle the result of spam detection. Opens its own sessions."""
+        if is_spam:
+            if require_approval:
+                await self._notify_admin(user_id, chat_id, message_id, message_text)
             else:
-                # Automatically ban the user
                 await self._process_ban(
-                    user_id=queue_item.user_id,
-                    chat_id=queue_item.chat_id,
-                    message_id=queue_item.message_id,
-                    message_text=queue_item.message_text,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    message_text=message_text,
                     is_automatic=True,
-                    session=session
                 )
         else:
-            # If not spam, approve the user
-            await self._auto_approve_user(queue_item.user_id, queue_item.chat_id, session)
-            
-    async def _notify_admin(self, queue_item: MessageQueue, session: Session):
-        """Notify admin about potential spam. Session must be provided."""
-        logger.info(f"[SPAM] Requesting admin approval for user_id={queue_item.user_id} chat_id={queue_item.chat_id}")
+            await self._auto_approve_user(user_id, chat_id)
 
-        try:
-            # Get user name
-            user_name = await self._get_user_name(queue_item.user_id)
+    async def _notify_admin(self, user_id: int, chat_id: int, message_id: int, message_text: str):
+        """Notify admin about potential spam. Opens its own session."""
+        logger.info(f"[SPAM] Requesting admin approval for user_id={user_id} chat_id={chat_id}")
 
-            admin_message = (
-                f"User {user_name} ({queue_item.user_id}) sent a message in chat {queue_item.chat_id}:\n\n"
-                f"{queue_item.message_text}\n\nShould I ban this user? Reply 'yes' to ban."
-            )
-            sent_message = await self.telegram_client.send_message(self.config.admin_id, admin_message)
-            logger.debug(f"Admin notification sent with message ID: {sent_message.id}")
+        # Async I/O first — no session
+        user_name = await self._get_user_name(user_id)
 
-            # Store the pending request in the database
+        admin_message = (
+            f"User {user_name} ({user_id}) sent a message in chat {chat_id}:\n\n"
+            f"{message_text}\n\nShould I ban this user? Reply 'yes' to ban."
+        )
+        sent_message = await self.telegram_client.send_message(self.config.admin_id, admin_message)
+        logger.debug(f"Admin notification sent with message ID: {sent_message.id}")
+
+        # DB write — own session
+        with self._get_session() as session:
             pending_request = PendingBanRequest(
                 admin_message_id=sent_message.id,
-                sender_id=queue_item.user_id,
-                original_chat_id=queue_item.chat_id,
-                original_message_id=queue_item.message_id,
-                message_text=queue_item.message_text,
+                sender_id=user_id,
+                original_chat_id=chat_id,
+                original_message_id=message_id,
+                message_text=message_text,
                 created_at=datetime.now(UTC)
             )
             session.add(pending_request)
-            logger.debug(f"Pending ban request stored for user {queue_item.user_id}")
-            
-        except Exception as e:
-            logger.error(f"Error notifying admin about user {queue_item.user_id}: {str(e)}")
-            raise
-            
-    async def _process_ban(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool, session: Session):
-        """Process a ban for a user. Session must be provided."""
+            session.commit()
+            logger.debug(f"Pending ban request stored for user {user_id}")
+
+    async def _process_ban(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool):
+        """Process a ban for a user. Opens its own session."""
         ban_type = "automatic" if is_automatic else "manual"
         logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
 
-        try:
-            # Send the ban command
-            reason = f"autoban by staring misaka. message: {message_text}"
-            await self.userbot.send_ban_command(chat_id, message_id, reason)
+        # Async I/O first — no session
+        reason = f"autoban by staring misaka. message: {message_text}"
+        await self.userbot.send_ban_command(chat_id, message_id, reason)
 
-            # Store the ban information in the database
-            user_name = await self._get_user_name(user_id)
+        user_name = await self._get_user_name(user_id)
+
+        # DB write — own session
+        with self._get_session() as session:
             banned_user = BannedUser(
                 user_id=user_id,
                 user_name=user_name,
@@ -268,48 +290,39 @@ class QueueProcessor:
             )
             session.add(banned_user)
 
-            # Remove the user from NewUser table if they're still there
             new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
             if new_user:
                 session.delete(new_user)
 
+            session.commit()
             logger.debug(f"Ban information stored for user {user_id}")
 
-            # Notify admin about the ban
-            admin_message = (
-                f"User {user_id} has been {'automatically ' if is_automatic else ''}banned "
-                f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
-            )
-            await self.telegram_client.send_message(self.config.admin_id, admin_message)
-            
-        except Exception as e:
-            logger.error(f"Error processing ban for user {user_id}: {str(e)}")
-            raise
-            
-    async def _auto_approve_user(self, user_id: int, chat_id: int, session: Session):
-        """Auto-approve a user who passed spam check. Session must be provided."""
+        # Async I/O — no session
+        admin_message = (
+            f"User {user_id} has been {'automatically ' if is_automatic else ''}banned "
+            f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
+        )
+        await self.telegram_client.send_message(self.config.admin_id, admin_message)
+
+    async def _auto_approve_user(self, user_id: int, chat_id: int):
+        """Auto-approve a user who passed spam check. Opens its own session."""
         logger.debug(f"Auto-approving user {user_id} in chat {chat_id}")
 
-        try:
-            # Remove from monitoring
+        with self._get_session() as session:
             new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
             if new_user:
                 session.delete(new_user)
                 logger.debug(f"User {user_id} removed from monitoring")
 
-            # Add to approved users list
             existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
             if not existing_approval:
                 approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now(UTC))
                 session.add(approved_user)
                 logger.debug(f"User {user_id} added to approved list")
 
+            session.commit()
             logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
-                
-        except Exception as e:
-            logger.error(f"Error auto-approving user {user_id}: {str(e)}")
-            raise
-            
+
     async def _get_user_name(self, user_id: int) -> Optional[str]:
         try:
             user = await self.telegram_client.get_entity(user_id)
@@ -320,8 +333,8 @@ class QueueProcessor:
             else:
                 logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
             return f"User_{user_id}"
-            
-    def add_message_to_queue(self, user_id: int, chat_id: int, message_id: int, message_text: str) -> MessageQueue:
+
+    async def add_message_to_queue(self, user_id: int, chat_id: int, message_id: int, message_text: str) -> MessageQueue:
         """Add a message to the processing queue using UPSERT to handle duplicates.
 
         Uses SQLite's INSERT OR IGNORE to atomically handle duplicate messages.
@@ -330,7 +343,6 @@ class QueueProcessor:
 
         from sqlalchemy.dialects.sqlite import insert
         from sqlalchemy.exc import OperationalError
-        import time
 
         payload = {
             'user_id': user_id,
@@ -365,13 +377,13 @@ class QueueProcessor:
                     else:
                         logger.debug(f"Message not found after insert for user {user_id}")
                         # Continue to retry
-                        time.sleep(delay)
+                        await asyncio.sleep(delay)
                         continue
 
             except OperationalError as e:
                 if 'locked' in str(e).lower() and attempt < 4:
                     logger.warning(f"Database locked on attempt {attempt}, retrying in {delay}s...")
-                    time.sleep(delay)
+                    await asyncio.sleep(delay)
                 else:
                     logger.error(f"Failed to add message to queue after {attempt} attempts")
                     raise
@@ -381,7 +393,7 @@ class QueueProcessor:
 
         # If we exhausted all retries
         raise OperationalError("database is locked", None, None)
-        
+
     def get_queue_status(self):
         """Get current queue status for admin"""
         with self._get_session() as session:
@@ -408,7 +420,7 @@ class QueueProcessor:
                     'completed': 0,
                     'total': 0
                 }
-        
+
     def retry_failed_messages(self) -> int:
         """Retry all failed messages by resetting their status"""
         with self._get_session() as session:
@@ -430,7 +442,7 @@ class QueueProcessor:
             except Exception:
                 # If there's any database error, return 0
                 return 0
-        
+
     def clear_completed_messages(self, older_than_hours: int = 24) -> int:
         """Clear completed messages older than specified hours"""
         cutoff_time = datetime.now(UTC) - timedelta(hours=older_than_hours)

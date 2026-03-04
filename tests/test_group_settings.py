@@ -214,7 +214,10 @@ class TestGroupSettings:
         test_session.commit()
 
         # Process the message
-        await queue_processor._process_message(queue_item, test_session)
+        await queue_processor._process_message(
+            queue_item.id, queue_item.user_id, queue_item.chat_id,
+            queue_item.message_id, queue_item.message_text, queue_item.retry_count
+        )
 
         # Verify that message was marked as completed without spam check
         test_session.refresh(queue_item)

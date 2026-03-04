@@ -189,7 +189,7 @@ def make_session_factory(config):
     def set_sqlite_pragma(dbapi_conn, connection_record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
-        cursor.execute("PRAGMA busy_timeout=30000")  # 30 second timeout in milliseconds
+        cursor.execute("PRAGMA busy_timeout=5000")  # 5 second timeout in milliseconds
         cursor.execute("PRAGMA synchronous=NORMAL")  # Balance between safety and performance
         cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
         cursor.close()

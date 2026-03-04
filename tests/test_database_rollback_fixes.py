@@ -135,7 +135,7 @@ class TestQueueProcessorRollback:
         import time
 
         # First, insert should succeed even if there are transient errors
-        result = queue_processor.add_message_to_queue(
+        result = await queue_processor.add_message_to_queue(
             user_id=12345,
             chat_id=67890,
             message_id=111,
@@ -171,7 +171,7 @@ class TestQueueProcessorRollback:
         existing_id = existing.id
 
         # Try to add the same message again - UPSERT should handle this gracefully
-        result = queue_processor.add_message_to_queue(
+        result = await queue_processor.add_message_to_queue(
             user_id=12345,
             chat_id=67890,
             message_id=111,
@@ -212,7 +212,7 @@ class TestQueueProcessorRollback:
         try:
             # Should raise after retry attempts fail
             with pytest.raises(OperationalError, match="database is locked"):
-                queue_processor.add_message_to_queue(
+                await queue_processor.add_message_to_queue(
                     user_id=12345,
                     chat_id=67890,
                     message_id=111,
@@ -247,7 +247,7 @@ class TestSQLiteWALConfiguration:
 
             # Check busy timeout is set
             result = session.execute(text("PRAGMA busy_timeout")).fetchone()
-            assert result[0] >= 30000, f"Expected busy_timeout >= 30000ms, got {result[0]}"
+            assert result[0] >= 5000, f"Expected busy_timeout >= 5000ms, got {result[0]}"
 
             # Check synchronous mode
             result = session.execute(text("PRAGMA synchronous")).fetchone()
@@ -331,7 +331,7 @@ class TestConcurrentDatabaseAccess:
             results = []
             for i in range(5):
                 try:
-                    result = processor.add_message_to_queue(
+                    result = await processor.add_message_to_queue(
                         user_id=start_id + i,
                         chat_id=12345,
                         message_id=start_id + i,
@@ -534,7 +534,7 @@ class TestCrossHandlerContamination:
         # Try to add message - will fail on first attempt but retry should work
         with patch.object(test_session, 'commit', side_effect=failing_commit):
             try:
-                result = processor.add_message_to_queue(
+                result = await processor.add_message_to_queue(
                     user_id=8293886244,
                     chat_id=-1002081931239,
                     message_id=31330,
