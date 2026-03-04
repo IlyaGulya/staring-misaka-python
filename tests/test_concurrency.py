@@ -3,7 +3,7 @@ import asyncio
 import tempfile
 import os
 from datetime import datetime, UTC
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from queue_processor import QueueProcessor
 from db import MessageQueue, NewUser, create_session, AdminSettings
@@ -468,3 +468,141 @@ class TestQueueProcessorConcurrency:
         await asyncio.sleep(0.1)
         processor.stop()
         await asyncio.gather(processor_task, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_no_sqlite_write_lock_held_during_network_io(self, shared_db_config):
+        """Production scenario: verify no SQLite RESERVED/WRITE lock is held during network I/O.
+
+        This reproduces the EXACT production bug:
+        1. QueueProcessor detects spam → calls _process_ban()
+        2. OLD CODE (_process_ban with shared session):
+           - session.add(BannedUser)      → pending INSERT
+           - session.query(NewUser)       → autoflush → INSERT executed → RESERVED lock!
+           - await telegram.send_message  → network I/O with RESERVED lock held!
+           → Any other writer blocks on busy_timeout (30 sec sync C-level)
+           → Event loop frozen → Telethon dies
+        3. NEW CODE (_process_ban with own session):
+           - await network I/O first (no session, no lock)
+           - then open session → DB writes → commit → close
+           → Lock held only for milliseconds
+
+        We verify by trying to write from another thread while the processor
+        is in the middle of _process_ban's network I/O.
+        """
+        import sqlite3
+        import threading
+        import time
+        from db import make_session_factory, initialize_database
+
+        SessionFactory = make_session_factory(shared_db_config)
+        initialize_database(SessionFactory, shared_db_config)
+
+        session = SessionFactory()
+
+        # Set up for spam detection with automatic ban
+        admin_settings = session.query(AdminSettings).first()
+        admin_settings.require_approval = False
+        session.commit()
+
+        msg = MessageQueue(
+            user_id=7000,
+            chat_id=shared_db_config.tracking_chat_ids[0],
+            message_id=7001,
+            message_text="SQLite lock test message",
+            status='pending'
+        )
+        session.add(msg)
+        new_user = NewUser(user_id=7000, chat_id=shared_db_config.tracking_chat_ids[0])
+        session.add(new_user)
+        session.commit()
+        session.close()
+
+        # LLM returns spam
+        mock_llm = AsyncMock()
+        mock_llm.is_spam.return_value = True
+
+        # Userbot and telegram client: signal when send_message is called
+        # (this is the network I/O that happens AFTER DB writes in old code)
+        send_message_called = asyncio.Event()
+        send_message_can_finish = asyncio.Event()
+
+        mock_userbot = AsyncMock()
+        mock_telegram_client = AsyncMock()
+
+        # Mock get_entity for user name lookup
+        mock_user = MagicMock()
+        mock_user.username = "testuser"
+        mock_user.first_name = "Test"
+        mock_telegram_client.get_entity.return_value = mock_user
+
+        # Intercept send_message to admin (happens after DB writes in _process_ban)
+        async def slow_send_message(*args, **kwargs):
+            send_message_called.set()
+            await send_message_can_finish.wait()
+            return MagicMock(id=999)
+
+        mock_telegram_client.send_message.side_effect = slow_send_message
+
+        processor = QueueProcessor(
+            SessionFactory, mock_llm, mock_userbot, mock_telegram_client,
+            shared_db_config, processing_delay=0.005
+        )
+
+        # Start processor
+        processor_task = asyncio.create_task(processor.start())
+
+        # Wait for send_message to be called (processor is now doing network I/O)
+        await asyncio.wait_for(send_message_called.wait(), timeout=3.0)
+
+        # NOW: the processor is in the middle of send_message (network I/O).
+        # In old code: session has pending writes (BannedUser INSERT flushed)
+        #   → RESERVED lock held → other writers BLOCKED
+        # In new code: no session open → no lock → other writers succeed
+
+        write_result = {}
+
+        def try_concurrent_write():
+            """Try to write from another thread while processor does network I/O."""
+            conn = sqlite3.connect(shared_db_config.db_path, timeout=1.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            start = time.monotonic()
+            try:
+                conn.execute(
+                    "INSERT INTO message_queue (user_id, chat_id, message_id, message_text, status, retry_count, max_retries) "
+                    "VALUES (?, ?, ?, ?, 'pending', 0, 5)",
+                    (9999, shared_db_config.tracking_chat_ids[0], 9999, "concurrent write test")
+                )
+                conn.commit()
+                elapsed = time.monotonic() - start
+                write_result['success'] = True
+                write_result['elapsed'] = elapsed
+            except sqlite3.OperationalError as e:
+                elapsed = time.monotonic() - start
+                write_result['success'] = False
+                write_result['elapsed'] = elapsed
+                write_result['error'] = str(e)
+            finally:
+                conn.close()
+
+        write_thread = threading.Thread(target=try_concurrent_write)
+        write_thread.start()
+        await asyncio.to_thread(write_thread.join, timeout=3.0)
+
+        # THE KEY ASSERTION: concurrent write should succeed quickly
+        assert write_result.get('success', False), (
+            f"Concurrent write BLOCKED while processor was doing network I/O! "
+            f"Error: {write_result.get('error', 'unknown')}. "
+            f"This means the processor holds a SQLite RESERVED lock across await, "
+            f"which is the exact production bug causing 'database is locked'."
+        )
+        assert write_result['elapsed'] < 1.0, (
+            f"Concurrent write took {write_result['elapsed']:.2f}s — "
+            f"suggests a RESERVED lock was held during network I/O."
+        )
+
+        # Clean up
+        send_message_can_finish.set()
+        await asyncio.sleep(0.2)
+        processor.stop()
+        await asyncio.gather(processor_task, return_exceptions=True)
+
