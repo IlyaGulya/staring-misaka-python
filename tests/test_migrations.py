@@ -66,7 +66,6 @@ class TestDatabaseMigrations:
                 'message_queue',
                 'new_users',
                 'pending_ban_requests',
-                'spam_check_results',
             ]
 
             assert set(tables) == set(expected_tables)
@@ -125,12 +124,8 @@ class TestDatabaseMigrations:
                 """))
                 model_tables = set(row[0] for row in model_result.fetchall())
             
-            # Model tables should be a subset of migration tables
-            # (migrations may include tables not yet reflected in models,
-            # e.g. spam_check_results added via migration but used directly via SQL)
-            assert model_tables.issubset(migration_tables), (
-                f"Model tables missing from migrations: {model_tables - migration_tables}"
-            )
+            # Tables should match
+            assert migration_tables == model_tables
             
         finally:
             if os.path.exists(model_db_path):
@@ -177,7 +172,6 @@ class TestDatabaseMigrations:
                 'message_queue',
                 'new_users',
                 'pending_ban_requests',
-                'spam_check_results',
             ]
 
             assert set(tables) == set(expected_tables)

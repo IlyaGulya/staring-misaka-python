@@ -1,10 +1,13 @@
+import json
 import logging
 from datetime import datetime, UTC
+from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from telethon import TelegramClient, events
-from telethon.tl.types import UpdateChannelParticipant
+from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.types import UpdateChannelParticipant, PeerChannel
 
 from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue, GroupSettings
 from llm import Llm
@@ -12,6 +15,32 @@ from userbot import UserBot
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+_raw_events_file = None
+
+
+def _init_raw_events(db_path: str):
+    """Initialize raw events JSONL path next to the database file."""
+    global _raw_events_file
+    raw_dir = Path(db_path).parent / "raw_events"
+    raw_dir.mkdir(exist_ok=True)
+    _raw_events_file = raw_dir / "messages.jsonl"
+
+
+def _dump_raw_event(event):
+    """Dump raw Telegram message to JSONL file. Fire-and-forget, never raises."""
+    if _raw_events_file is None:
+        return
+    try:
+        data = {
+            "ts": datetime.now(UTC).isoformat(),
+            "chat_id": event.chat_id,
+            "message": event.message.to_dict(),
+        }
+        with open(_raw_events_file, "a") as f:
+            f.write(json.dumps(data, default=str, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug(f"Failed to dump raw event: {e}")
 
 
 def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config) -> TelegramClient:
@@ -28,9 +57,37 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
     """
     client = TelegramClient(config.bot_session_path, config.api_id, config.api_hash)
     logger.info("Creating Telegram bot client")
+    _init_raw_events(config.db_path)
 
     # Initialize queue processor reference (will be set later)
     client.queue_processor = None
+
+    # Cache: chat_id -> linked_channel_id (int, None, or _UNKNOWN on API error)
+    _UNKNOWN = object()
+    _linked_channel_cache = {}
+
+    async def _get_linked_channel_id(chat_id: int):
+        """Get the linked channel ID for a discussion group (cached).
+
+        Returns:
+            int: linked channel ID
+            None: no linked channel (confirmed by API)
+            _UNKNOWN: API error, couldn't determine
+        """
+        if chat_id in _linked_channel_cache:
+            return _linked_channel_cache[chat_id]
+        try:
+            entity = await client.get_entity(chat_id)
+            full = await client(GetFullChannelRequest(entity))
+            linked_id = getattr(full.full_chat, 'linked_chat_id', None)
+            _linked_channel_cache[chat_id] = linked_id
+            if linked_id:
+                logger.info(f"Chat {chat_id} is discussion group for channel {linked_id}")
+            return linked_id
+        except Exception as e:
+            # Don't cache on error — could be transient (rate limit, disconnect).
+            logger.warning(f"Could not fetch linked channel for chat {chat_id}: {e}")
+            return _UNKNOWN
 
     def is_bot_enabled_for_chat(session: Session, chat_id: int) -> bool:
         """Check if bot is enabled for the given chat. Session must be provided."""
@@ -149,8 +206,68 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
 
         # Phase 4: Queue message or fallback (async I/O)
         if is_new_user:
+            _dump_raw_event(event)
             message_text = event.raw_text
             logger.info(f"[MONITORING] user_id={sender.id} chat_id={event.chat_id} message='{message_text[:50]}...'")
+
+            # Fetch reply message text for LLM context (if this is a reply)
+            reply_msg_text = None
+            try:
+                reply_msg = await event.message.get_reply_message()
+                if reply_msg and reply_msg.text:
+                    reply_msg_text = reply_msg.text
+            except Exception as e:
+                logger.debug(f"Could not fetch reply message: {e}")
+
+            # Check for cross-channel reply spam pattern:
+            # Spammers join and post short messages like "Лучший!" as replies
+            # to posts from unrelated channels, not from this group.
+            reply_to = event.message.reply_to
+            if reply_to and getattr(reply_to, 'reply_to_peer_id', None):
+                reply_peer = reply_to.reply_to_peer_id
+                if isinstance(reply_peer, PeerChannel):
+                    # Convert supergroup chat_id (-100XXXXXXXXXX) to channel_id
+                    current_channel_id = -(event.chat_id) - 1000000000000
+                    if reply_peer.channel_id != current_channel_id:
+                        # Don't flag replies to the group's own linked channel.
+                        # If we can't determine the linked channel (API error),
+                        # skip the check and let LLM decide instead of risking a false ban.
+                        linked_channel_id = await _get_linked_channel_id(event.chat_id)
+                        if linked_channel_id is _UNKNOWN:
+                            # Can't verify linked channel — enrich context for LLM
+                            parts = [
+                                "<cross_channel_reply>",
+                                f"This message is a reply to a post from a different channel (ID: {reply_peer.channel_id}), "
+                                f"not from this group's own channel.",
+                                "</cross_channel_reply>",
+                            ]
+                            if reply_msg_text:
+                                parts.extend([
+                                    f"<original_post>{reply_msg_text}</original_post>",
+                                ])
+                            parts.append(f"<message>{message_text}</message>")
+                            message_text = "\n".join(parts)
+                            logger.info(
+                                f"[CROSS-CHANNEL REPLY?] user_id={sender.id} chat_id={event.chat_id} "
+                                f"reply_to_channel={reply_peer.channel_id} — linked channel unknown, forwarding to LLM"
+                            )
+                        elif reply_peer.channel_id != linked_channel_id:
+                            logger.info(
+                                f"[CROSS-CHANNEL REPLY] user_id={sender.id} chat_id={event.chat_id} "
+                                f"reply_to_channel={reply_peer.channel_id} message='{message_text[:50]}...'"
+                            )
+                            await process_ban(
+                                user_id=sender.id,
+                                chat_id=event.chat_id,
+                                message_id=event.id,
+                                message_text=message_text,
+                                is_automatic=True,
+                            )
+                            return
+
+            # Add reply context for LLM classification
+            if reply_msg_text and "<original_post>" not in message_text:
+                message_text = f"<replying_to>{reply_msg_text}</replying_to>\n<message>{message_text}</message>"
 
             if client.queue_processor:
                 try:
@@ -584,6 +701,8 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                 logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
 
     logger.info("Bot setup complete")
+    # Expose linked channel cache for testing
+    client._linked_channel_cache = _linked_channel_cache
     # Expose handlers for tests to call directly without poking into Telethon internals.
     # This is inert in production and simplifies unit/integration tests.
     client._handlers = {

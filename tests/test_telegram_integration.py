@@ -2,8 +2,10 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, UTC, timedelta
 
+from telethon.tl.types import PeerChannel
+
 from telegram import create_bot
-from db import MessageQueue, NewUser, AdminSettings, ApprovedUser
+from db import MessageQueue, NewUser, BannedUser, AdminSettings, ApprovedUser
 from queue_processor import QueueProcessor
 
 
@@ -15,7 +17,8 @@ class TestTelegramIntegration:
         event.chat_id = 67890
         event.id = 111
         event.raw_text = "Test spam message"
-        
+        event.message.reply_to = None
+
         # Mock sender
         sender = MagicMock()
         sender.id = 12345
@@ -23,7 +26,7 @@ class TestTelegramIntegration:
         sender.username = "testuser"
         event.get_sender = AsyncMock(return_value=sender)
         event.sender_id = sender.id
-        
+
         return event
 
     @pytest.fixture
@@ -279,3 +282,198 @@ class TestTelegramIntegration:
         # This tests that the handler properly checks sender_id
         # In actual implementation, this would be filtered by the event builder
         pass  # Test passes if no exception is raised
+
+
+class TestCrossChannelReplyDetection:
+    """Tests for cross-channel reply spam detection."""
+
+    SUPERGROUP_CHAT_ID = -1001075815423
+    CURRENT_CHANNEL_ID = 1075815423
+    UNRELATED_CHANNEL_ID = 9999999999
+    LINKED_CHANNEL_ID = 5555555555
+
+    @pytest.fixture
+    def cross_channel_event(self):
+        """Create a mock event with a cross-channel reply."""
+        event = MagicMock()
+        event.chat_id = self.SUPERGROUP_CHAT_ID
+        event.id = 111
+        event.raw_text = "Лучший!!"
+        event.message.reply_to.reply_to_peer_id = PeerChannel(channel_id=self.UNRELATED_CHANNEL_ID)
+
+        sender = MagicMock()
+        sender.id = 12345
+        sender.first_name = "Spammer"
+        sender.username = "spammer_bot"
+        event.get_sender = AsyncMock(return_value=sender)
+        event.sender_id = sender.id
+
+        return event
+
+    @pytest.fixture
+    def cross_channel_test_config(self, test_config):
+        """Extend test config to include supergroup chat ID."""
+        test_config.tracking_chat_ids = [self.SUPERGROUP_CHAT_ID]
+        return test_config
+
+    @pytest.mark.asyncio
+    async def test_cross_channel_reply_triggers_ban(self, session_factory, test_session, mock_llm, mock_userbot, cross_channel_event, cross_channel_test_config):
+        """New user replying to a post from an unrelated channel gets banned."""
+        new_user = NewUser(user_id=12345, chat_id=self.SUPERGROUP_CHAT_ID)
+        test_session.add(new_user)
+        test_session.commit()
+
+        bot = create_bot(session_factory, mock_llm, mock_userbot, cross_channel_test_config)
+        bot.queue_processor = MagicMock()
+        bot.queue_processor.add_message_to_queue = AsyncMock()
+        # Pre-populate cache: no linked channel for this group
+        bot._linked_channel_cache[self.SUPERGROUP_CHAT_ID] = None
+        # Mock client methods (bot IS the TelegramClient)
+        bot.send_message = AsyncMock()
+        bot.get_entity = AsyncMock(return_value=MagicMock(username="spammer_bot", first_name="Spammer"))
+
+        message_handler = bot._handlers["message_handler"]
+        await message_handler(cross_channel_event)
+
+        # Should NOT go to queue — banned directly
+        bot.queue_processor.add_message_to_queue.assert_not_called()
+        # LLM should NOT be called
+        mock_llm.is_spam.assert_not_called()
+        # User should be banned
+        banned = test_session.query(BannedUser).filter_by(user_id=12345).first()
+        assert banned is not None
+
+    @pytest.mark.asyncio
+    async def test_linked_channel_reply_not_banned(self, session_factory, test_session, mock_llm, mock_userbot, cross_channel_test_config):
+        """Reply to the group's own linked channel is legitimate — goes to queue."""
+        new_user = NewUser(user_id=12345, chat_id=self.SUPERGROUP_CHAT_ID)
+        test_session.add(new_user)
+        test_session.commit()
+
+        event = MagicMock()
+        event.chat_id = self.SUPERGROUP_CHAT_ID
+        event.id = 222
+        event.raw_text = "Отличный пост!"
+        event.message.reply_to.reply_to_peer_id = PeerChannel(channel_id=self.LINKED_CHANNEL_ID)
+
+        sender = MagicMock()
+        sender.id = 12345
+        sender.first_name = "Real User"
+        sender.username = "realuser"
+        event.get_sender = AsyncMock(return_value=sender)
+        event.sender_id = sender.id
+
+        bot = create_bot(session_factory, mock_llm, mock_userbot, cross_channel_test_config)
+        # Pre-populate linked channel cache
+        bot._linked_channel_cache[self.SUPERGROUP_CHAT_ID] = self.LINKED_CHANNEL_ID
+        bot.queue_processor = MagicMock()
+        bot.queue_processor.add_message_to_queue = AsyncMock()
+
+        message_handler = bot._handlers["message_handler"]
+        await message_handler(event)
+
+        # Should go to queue, NOT banned
+        bot.queue_processor.add_message_to_queue.assert_called_once()
+        banned = test_session.query(BannedUser).filter_by(user_id=12345).first()
+        assert banned is None
+
+    @pytest.mark.asyncio
+    async def test_same_channel_reply_not_banned(self, session_factory, test_session, mock_llm, mock_userbot, cross_channel_test_config):
+        """Reply to a post from this same group is not flagged."""
+        new_user = NewUser(user_id=12345, chat_id=self.SUPERGROUP_CHAT_ID)
+        test_session.add(new_user)
+        test_session.commit()
+
+        event = MagicMock()
+        event.chat_id = self.SUPERGROUP_CHAT_ID
+        event.id = 333
+        event.raw_text = "Согласен!"
+        event.message.reply_to.reply_to_peer_id = PeerChannel(channel_id=self.CURRENT_CHANNEL_ID)
+
+        sender = MagicMock()
+        sender.id = 12345
+        sender.first_name = "Normal User"
+        sender.username = "normaluser"
+        event.get_sender = AsyncMock(return_value=sender)
+        event.sender_id = sender.id
+
+        bot = create_bot(session_factory, mock_llm, mock_userbot, cross_channel_test_config)
+        bot.queue_processor = MagicMock()
+        bot.queue_processor.add_message_to_queue = AsyncMock()
+
+        message_handler = bot._handlers["message_handler"]
+        await message_handler(event)
+
+        # Should go to queue, NOT banned
+        bot.queue_processor.add_message_to_queue.assert_called_once()
+        banned = test_session.query(BannedUser).filter_by(user_id=12345).first()
+        assert banned is None
+
+    @pytest.mark.asyncio
+    async def test_api_error_skips_cross_channel_check(self, session_factory, test_session, mock_llm, mock_userbot, cross_channel_test_config):
+        """If linked channel API call fails, skip cross-channel ban and send to LLM instead."""
+        new_user = NewUser(user_id=12345, chat_id=self.SUPERGROUP_CHAT_ID)
+        test_session.add(new_user)
+        test_session.commit()
+
+        event = MagicMock()
+        event.chat_id = self.SUPERGROUP_CHAT_ID
+        event.id = 555
+        event.raw_text = "Лучший!!"
+        event.message.reply_to.reply_to_peer_id = PeerChannel(channel_id=self.UNRELATED_CHANNEL_ID)
+
+        sender = MagicMock()
+        sender.id = 12345
+        sender.first_name = "Maybe Spammer"
+        sender.username = "maybebot"
+        event.get_sender = AsyncMock(return_value=sender)
+        event.sender_id = sender.id
+
+        bot = create_bot(session_factory, mock_llm, mock_userbot, cross_channel_test_config)
+        bot.queue_processor = MagicMock()
+        bot.queue_processor.add_message_to_queue = AsyncMock()
+        # Do NOT pre-populate cache — _get_linked_channel_id will fail (client not connected)
+        # and return _UNKNOWN, so cross-channel check should be skipped
+
+        message_handler = bot._handlers["message_handler"]
+        await message_handler(event)
+
+        # Should go to queue (safe fallback), NOT banned
+        bot.queue_processor.add_message_to_queue.assert_called_once()
+        queued_text = bot.queue_processor.add_message_to_queue.call_args.kwargs['message_text']
+        assert "<cross_channel_reply>" in queued_text
+        assert "Лучший!!" in queued_text
+        banned = test_session.query(BannedUser).filter_by(user_id=12345).first()
+        assert banned is None
+
+    @pytest.mark.asyncio
+    async def test_no_reply_not_flagged(self, session_factory, test_session, mock_llm, mock_userbot, cross_channel_test_config):
+        """Regular message with no reply is not flagged by cross-channel check."""
+        new_user = NewUser(user_id=12345, chat_id=self.SUPERGROUP_CHAT_ID)
+        test_session.add(new_user)
+        test_session.commit()
+
+        event = MagicMock()
+        event.chat_id = self.SUPERGROUP_CHAT_ID
+        event.id = 444
+        event.raw_text = "Привет всем!"
+        event.message.reply_to = None
+
+        sender = MagicMock()
+        sender.id = 12345
+        sender.first_name = "Normal User"
+        sender.username = "normaluser"
+        event.get_sender = AsyncMock(return_value=sender)
+        event.sender_id = sender.id
+
+        bot = create_bot(session_factory, mock_llm, mock_userbot, cross_channel_test_config)
+        bot.queue_processor = MagicMock()
+        bot.queue_processor.add_message_to_queue = AsyncMock()
+
+        message_handler = bot._handlers["message_handler"]
+        await message_handler(event)
+
+        # Should go to queue, NOT banned
+        bot.queue_processor.add_message_to_queue.assert_called_once()
+        banned = test_session.query(BannedUser).filter_by(user_id=12345).first()
+        assert banned is None
