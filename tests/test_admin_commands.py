@@ -153,7 +153,8 @@ class TestAdminCommands:
         assert len(remaining) == 1
         assert remaining[0].status == 'pending'
 
-    def test_admin_commands_integration_with_telegram_bot(self, session_factory, test_session, mock_llm, mock_userbot, mock_telegram_client, test_config):
+    @pytest.mark.asyncio
+    async def test_admin_commands_integration_with_telegram_bot(self, session_factory, test_session, mock_llm, mock_userbot, mock_telegram_client, test_config):
         """Test admin commands integration with Telegram bot handlers"""
         from telegram import create_bot
         

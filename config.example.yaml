@@ -1,0 +1,22 @@
+# Spam Detection Configuration
+# Copy this file to config.yaml and customize for your needs
+
+# LLM model to use for spam detection (no validation - allows new models without code changes)
+model: claude-haiku-4-5-20251001
+
+# Whether to include LLM's spam reason in the /sban command message (default: false)
+# include_reason_in_ban: true
+
+# Default config for chats not explicitly configured
+default:
+  context: "a general Telegram group"
+  rules: "Be conservative - only flag obvious spam"
+  spam_conditions: "unsolicited ads, scams, phishing attempts, crypto promotions"
+
+# Per-chat configuration (chat_id as key)
+# Uncomment and customize for your specific chats
+# chats:
+#   -1001234567890:
+#     context: "a programming community focused on Python and web development"
+#     rules: "Technical discussions and beginner questions are welcome."
+#     spam_conditions: "crypto promotions, gambling links, unrelated product ads"

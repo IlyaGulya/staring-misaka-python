@@ -2,6 +2,7 @@ import json
 import logging
 from datetime import datetime, UTC
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -9,7 +10,7 @@ from telethon import TelegramClient, events
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.types import UpdateChannelParticipant, PeerChannel
 
-from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue, GroupSettings
+from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue, GroupSettings, SpamCheckResult
 from llm import Llm
 from message_metadata import extract_metadata
 from userbot import UserBot
@@ -402,7 +403,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
             session.commit()
             logger.debug(f"Pending ban request stored for user {sender.id}")
 
-    async def process_ban(user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool):
+    async def process_ban(user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool, spam_reason: Optional[str] = None, spam_check_id: Optional[int] = None):
         """Process a ban for a user. Opens its own session."""
         ban_type = "automatic" if is_automatic else "manual"
         logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
@@ -416,6 +417,7 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                 user_name=user_name_str,
                 chat_id=chat_id,
                 message_text=message_text,
+                spam_check_id=spam_check_id,
                 banned_at=datetime.now(UTC)
             )
             session.add(banned_user)
@@ -535,8 +537,8 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                 logger.debug("Admin reply not for a pending ban request")
         else:
             # Existing code for processing non-reply messages from admin
-            is_spam = await llm.is_spam(event.raw_text)
-            await client.send_message(config.admin_id, f"Is spam: {is_spam}")
+            resp = await llm.is_spam(event.raw_text, chat_id=None)
+            await client.send_message(config.admin_id, f"Is spam: {resp.is_spam}\nReason: {resp.reason}")
 
     async def approve_user(user_identifier: str, target_chat_id: int):
         """Approve a user for a chat. Opens its own session."""

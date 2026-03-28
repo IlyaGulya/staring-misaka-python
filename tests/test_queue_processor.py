@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from queue_processor import QueueProcessor
 from db import MessageQueue, NewUser, AdminSettings, ApprovedUser, BannedUser, PendingBanRequest
+from llm import SpamCheckResponse
 
 
 class TestQueueProcessor:
@@ -189,7 +190,7 @@ class TestQueueProcessor:
     async def test_process_message_not_spam_auto_approve(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm):
         """Test processing message that is not spam - should auto-approve user"""
         # Configure LLM to return not spam
-        mock_llm.is_spam.return_value = False
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Not spam", is_spam=False)
 
         await queue_processor._process_message(
             sample_message_queue.id, sample_message_queue.user_id, sample_message_queue.chat_id,
@@ -218,7 +219,7 @@ class TestQueueProcessor:
     async def test_process_message_spam_with_admin_approval(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_telegram_client):
         """Test processing spam message with admin approval required"""
         # Configure LLM to return spam
-        mock_llm.is_spam.return_value = True
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Spam detected", is_spam=True)
 
         # Set admin settings to require approval
         admin_settings = test_session.query(AdminSettings).first()
@@ -256,7 +257,7 @@ class TestQueueProcessor:
     async def test_process_message_spam_automatic_ban(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_userbot, mock_telegram_client):
         """Test processing spam message with automatic ban"""
         # Configure LLM to return spam
-        mock_llm.is_spam.return_value = True
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Spam detected", is_spam=True)
 
         # Set admin settings to not require approval
         admin_settings = test_session.query(AdminSettings).first()

@@ -66,6 +66,7 @@ class TestDatabaseMigrations:
                 'message_queue',
                 'new_users',
                 'pending_ban_requests',
+                'spam_check_results',
             ]
 
             assert set(tables) == set(expected_tables)
@@ -172,6 +173,7 @@ class TestDatabaseMigrations:
                 'message_queue',
                 'new_users',
                 'pending_ban_requests',
+                'spam_check_results',
             ]
 
             assert set(tables) == set(expected_tables)

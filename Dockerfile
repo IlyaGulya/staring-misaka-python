@@ -1,4 +1,4 @@
-FROM ghcr.io/prefix-dev/pixi:0.55.0-noble
+FROM ghcr.io/prefix-dev/pixi:0.63.2-noble
 
 # Set working directory
 WORKDIR /app

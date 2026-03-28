@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from queue_processor import QueueProcessor
 from db import MessageQueue, NewUser, create_session, AdminSettings
 from config import Config
+from llm import SpamCheckResponse
 from tests.conftest import wait_for_condition
 
 
@@ -75,9 +76,9 @@ class TestQueueProcessorConcurrency:
 
         # Mock LLM and other dependencies
         mock_llm1 = AsyncMock()
-        mock_llm1.is_spam.return_value = False
+        mock_llm1.is_spam.return_value = SpamCheckResponse(reason="Not spam", is_spam=False)
         mock_llm2 = AsyncMock()
-        mock_llm2.is_spam.return_value = False
+        mock_llm2.is_spam.return_value = SpamCheckResponse(reason="Not spam", is_spam=False)
 
         mock_userbot1 = AsyncMock()
         mock_userbot2 = AsyncMock()
@@ -149,7 +150,9 @@ class TestQueueProcessorConcurrency:
 
         # Mock dependencies
         mock_llm = AsyncMock()
-        mock_llm.is_spam.return_value = False
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Not spam", is_spam=False)
+        mock_llm.spam_config = MagicMock()
+        mock_llm.spam_config.model = "claude-haiku-4-5-20251001"
         mock_userbot = AsyncMock()
         mock_telegram_client = AsyncMock()
 
@@ -325,12 +328,14 @@ class TestQueueProcessorConcurrency:
         # Mock LLM with slow processing to simulate active work
         processing_started = False
         mock_llm = AsyncMock()
+        mock_llm.spam_config = MagicMock()
+        mock_llm.spam_config.model = "claude-haiku-4-5-20251001"
 
-        async def slow_spam_check(message):
+        async def slow_spam_check(message, chat_id=None):
             nonlocal processing_started
             processing_started = True
             await asyncio.sleep(0.2)  # Simulate slow processing
-            return False
+            return SpamCheckResponse(reason="Not spam", is_spam=False)
 
         mock_llm.is_spam.side_effect = slow_spam_check
         mock_userbot = AsyncMock()
@@ -434,12 +439,12 @@ class TestQueueProcessorConcurrency:
 
         mock_llm = AsyncMock()
 
-        async def instrumented_llm(text):
+        async def instrumented_llm(text, chat_id=None):
             # Record snapshot of open sessions at the moment LLM is called
             sessions_open_during_llm.append(len(open_sessions))
             llm_called.set()
             await llm_can_finish.wait()
-            return False
+            return SpamCheckResponse(reason="Not spam", is_spam=False)
 
         mock_llm.is_spam.side_effect = instrumented_llm
         mock_userbot = AsyncMock()
@@ -519,7 +524,10 @@ class TestQueueProcessorConcurrency:
 
         # LLM returns spam
         mock_llm = AsyncMock()
-        mock_llm.is_spam.return_value = True
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Spam detected", is_spam=True)
+        mock_llm.spam_config = MagicMock()
+        mock_llm.spam_config.model = "claude-haiku-4-5-20251001"
+        mock_llm.spam_config.include_reason_in_ban = False
 
         # Userbot and telegram client: signal when send_message is called
         # (this is the network I/O that happens AFTER DB writes in old code)

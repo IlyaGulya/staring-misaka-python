@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from config import Config
 from db import Base, MessageQueue, NewUser, AdminSettings
+from llm import SpamCheckResponse
 
 
 @pytest.fixture
@@ -91,7 +92,10 @@ def test_session(session_factory, test_config):
 def mock_llm():
     """Mock LLM with configurable spam detection"""
     mock = AsyncMock()
-    mock.is_spam = AsyncMock(return_value=False)
+    mock.is_spam = AsyncMock(return_value=SpamCheckResponse(reason="Not spam", is_spam=False))
+    mock.spam_config = MagicMock()
+    mock.spam_config.model = "claude-haiku-4-5-20251001"
+    mock.spam_config.include_reason_in_ban = False
     return mock
 
 

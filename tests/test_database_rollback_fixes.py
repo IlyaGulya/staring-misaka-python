@@ -10,6 +10,7 @@ and PendingRollbackError issues, including:
 """
 
 import pytest
+import pytest_asyncio
 import asyncio
 import tempfile
 import os
@@ -52,8 +53,8 @@ class TestTelegramHandlerRollback:
 
         return event
 
-    @pytest.fixture
-    def bot_with_handlers(self, session_factory, mock_llm, mock_userbot, test_config):
+    @pytest_asyncio.fixture
+    async def bot_with_handlers(self, session_factory, mock_llm, mock_userbot, test_config):
         """Create a bot with all handlers registered"""
         bot = create_bot(session_factory, mock_llm, mock_userbot, test_config)
         return bot
@@ -444,8 +445,8 @@ class TestConcurrentDatabaseAccess:
 class TestCrossHandlerContamination:
     """Test that database errors in one handler don't affect other handlers"""
 
-    @pytest.fixture
-    def bot_with_handlers(self, session_factory, mock_llm, mock_userbot, test_config):
+    @pytest_asyncio.fixture
+    async def bot_with_handlers(self, session_factory, mock_llm, mock_userbot, test_config):
         """Create a bot with all handlers registered"""
         bot = create_bot(session_factory, mock_llm, mock_userbot, test_config)
         return bot

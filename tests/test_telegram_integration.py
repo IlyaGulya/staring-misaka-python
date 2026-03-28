@@ -6,6 +6,7 @@ from telethon.tl.types import PeerChannel
 
 from telegram import create_bot
 from db import MessageQueue, NewUser, BannedUser, AdminSettings, ApprovedUser
+from llm import SpamCheckResponse
 from queue_processor import QueueProcessor
 
 

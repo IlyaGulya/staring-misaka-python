@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy.orm import Session, sessionmaker
 from telethon import TelegramClient
 
-from db import MessageQueue, NewUser, PendingBanRequest, AdminSettings, ApprovedUser, BannedUser, GroupSettings
+from db import MessageQueue, NewUser, PendingBanRequest, AdminSettings, ApprovedUser, BannedUser, GroupSettings, SpamCheckResult
 from llm import Llm
 from userbot import UserBot
 
@@ -177,7 +177,7 @@ class QueueProcessor:
         # Phase 2: Async I/O — no session held
         try:
             logger.debug(f"Running spam check for user {user_id}")
-            is_spam = await self.llm.is_spam(message_text)
+            resp = await self.llm.is_spam(message_text, chat_id=chat_id)
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error processing queue item {item_id}: {error_msg}")
@@ -195,23 +195,42 @@ class QueueProcessor:
             return
 
         # Phase 3: DB write + handle result
-        if is_spam:
-            logger.info(f"[SPAM] Detected from user_id={user_id} chat_id={chat_id}")
+        if resp.is_spam:
+            logger.info(f"[SPAM] Detected from user_id={user_id} chat_id={chat_id} reason={resp.reason}")
         else:
-            logger.debug(f"Not spam: user {user_id}")
+            logger.debug(f"Not spam: user {user_id} reason={resp.reason}")
 
         with self._get_session() as session:
+            # Create SpamCheckResult record
+            spam_check = SpamCheckResult(
+                user_id=user_id,
+                chat_id=chat_id,
+                message_text=message_text,
+                is_spam=resp.is_spam,
+                reason=resp.reason,
+                raw_response=resp.model_dump_json(),
+                model=self.llm.spam_config.model,
+                checked_at=datetime.now(UTC),
+            )
+            session.add(spam_check)
+            session.flush()
+
             queue_item = session.query(MessageQueue).filter_by(id=item_id).first()
             if queue_item:
-                queue_item.spam_result = is_spam
+                queue_item.spam_result = resp.is_spam
+                queue_item.spam_reason = resp.reason
+                queue_item.raw_llm_response = resp.model_dump_json()
+                queue_item.spam_check_id = spam_check.id
                 queue_item.status = 'completed'
                 queue_item.processed_at = datetime.now(UTC)
                 queue_item.error_message = None
                 session.commit()
 
+            spam_check_id = spam_check.id
+
         # Handle spam result (each helper opens its own session)
         try:
-            await self._handle_spam_result(user_id, chat_id, message_id, message_text, is_spam, require_approval)
+            await self._handle_spam_result(user_id, chat_id, message_id, message_text, resp.is_spam, require_approval, spam_reason=resp.reason, spam_check_id=spam_check_id)
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error handling spam result for queue item {item_id}: {error_msg}")
@@ -224,7 +243,7 @@ class QueueProcessor:
                     queue_item.next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
                     session.commit()
 
-    async def _handle_spam_result(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_spam: bool, require_approval: bool):
+    async def _handle_spam_result(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_spam: bool, require_approval: bool, spam_reason: Optional[str] = None, spam_check_id: Optional[int] = None):
         """Handle the result of spam detection. Opens its own sessions."""
         if is_spam:
             if require_approval:
@@ -236,6 +255,8 @@ class QueueProcessor:
                     message_id=message_id,
                     message_text=message_text,
                     is_automatic=True,
+                    spam_reason=spam_reason,
+                    spam_check_id=spam_check_id,
                 )
         else:
             await self._auto_approve_user(user_id, chat_id)
@@ -268,7 +289,7 @@ class QueueProcessor:
             session.commit()
             logger.debug(f"Pending ban request stored for user {user_id}")
 
-    async def _process_ban(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool):
+    async def _process_ban(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool, spam_reason: Optional[str] = None, spam_check_id: Optional[int] = None):
         """Process a ban for a user. Opens its own session."""
         ban_type = "automatic" if is_automatic else "manual"
         logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
@@ -282,6 +303,7 @@ class QueueProcessor:
                 user_name=user_name,
                 chat_id=chat_id,
                 message_text=message_text,
+                spam_check_id=spam_check_id,
                 banned_at=datetime.now(UTC)
             )
             session.add(banned_user)

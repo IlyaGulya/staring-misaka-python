@@ -1,7 +1,7 @@
 import datetime
 import uuid
 
-from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func, UniqueConstraint, Index, event
+from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func, UniqueConstraint, Index, event, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 
 
@@ -65,6 +65,7 @@ class BannedUser(Base):
     user_name: Mapped[str] = mapped_column(Text, nullable=True)
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    spam_check_id: Mapped[int] = mapped_column(Integer, ForeignKey('spam_check_results.id'), nullable=True)
     banned_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -138,6 +139,30 @@ class GroupSettings(Base):
         )
 
 
+class SpamCheckResult(Base):
+    __tablename__ = 'spam_check_results'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_spam: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_response: Mapped[str] = mapped_column(Text, nullable=True)
+    model: Mapped[str] = mapped_column(Text, nullable=True)
+    checked_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_spam_check_results_user_chat", "user_id", "chat_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"SpamCheckResult(id={self.id!r}, user_id={self.user_id!r}, chat_id={self.chat_id!r}, "
+            f"is_spam={self.is_spam!r}, reason={self.reason!r}, checked_at={self.checked_at!r})"
+        )
+
+
 class MessageQueue(Base):
     __tablename__ = 'message_queue'
 
@@ -154,6 +179,9 @@ class MessageQueue(Base):
     processed_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
     spam_result: Mapped[bool] = mapped_column(Boolean, nullable=True)
+    spam_reason: Mapped[str] = mapped_column(Text, nullable=True)
+    raw_llm_response: Mapped[str] = mapped_column(Text, nullable=True)
+    spam_check_id: Mapped[int] = mapped_column(Integer, ForeignKey('spam_check_results.id'), nullable=True)
 
     # Unique constraint to prevent duplicate messages from same user/chat/message
     # Performance indexes for queue processing hot paths
