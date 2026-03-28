@@ -4,7 +4,7 @@ import tempfile
 import os
 from pathlib import Path
 
-from config import Config
+from config import Config, ChatSpamConfig, SpamConfig, load_spam_config
 
 
 class TestConfigValidation:
@@ -153,3 +153,78 @@ class TestConfigValidation:
         assert len(config.anthropic_api_key) == 10
         assert ':' in config.bot_token
         assert len(config.bot_token) > 40
+
+
+class TestSpamConfig:
+    """Test YAML spam config loading and per-chat overrides."""
+
+    def test_load_spam_config_defaults(self, tmp_path):
+        """Test loading a minimal config with only defaults."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "default:\n"
+            "  context: test group\n"
+            "  rules: be nice\n"
+            "  spam_conditions: ads, scams\n"
+        )
+
+        config = load_spam_config(str(yaml_file))
+
+        assert config.model == "claude-haiku-4-5-20251001"
+        assert config.include_reason_in_ban is False
+        assert config.default.context == "test group"
+        assert config.default.rules == "be nice"
+        assert config.default.spam_conditions == "ads, scams"
+        assert config.chats == {}
+
+    def test_load_spam_config_with_per_chat(self, tmp_path):
+        """Test loading config with per-chat overrides."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "model: claude-sonnet-4-6\n"
+            "include_reason_in_ban: true\n"
+            "default:\n"
+            "  context: general group\n"
+            "  rules: default rules\n"
+            "  spam_conditions: default conditions\n"
+            "chats:\n"
+            "  -1001234567890:\n"
+            "    context: python dev group\n"
+            "    rules: tech discussions allowed\n"
+            "    spam_conditions: crypto, gambling\n"
+        )
+
+        config = load_spam_config(str(yaml_file))
+
+        assert config.model == "claude-sonnet-4-6"
+        assert config.include_reason_in_ban is True
+        assert -1001234567890 in config.chats
+        chat_config = config.chats[-1001234567890]
+        assert chat_config.context == "python dev group"
+        assert chat_config.rules == "tech discussions allowed"
+        assert chat_config.spam_conditions == "crypto, gambling"
+
+    def test_load_spam_config_multiple_chats(self, tmp_path):
+        """Test loading config with multiple per-chat overrides."""
+        yaml_file = tmp_path / "config.yaml"
+        yaml_file.write_text(
+            "default:\n"
+            "  context: default\n"
+            "  rules: default\n"
+            "  spam_conditions: default\n"
+            "chats:\n"
+            "  111:\n"
+            "    context: chat one\n"
+            "    rules: rules one\n"
+            "    spam_conditions: conditions one\n"
+            "  222:\n"
+            "    context: chat two\n"
+            "    rules: rules two\n"
+            "    spam_conditions: conditions two\n"
+        )
+
+        config = load_spam_config(str(yaml_file))
+
+        assert len(config.chats) == 2
+        assert config.chats[111].context == "chat one"
+        assert config.chats[222].context == "chat two"
