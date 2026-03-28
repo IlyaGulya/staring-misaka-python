@@ -18,26 +18,12 @@ from config import SpamConfig
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """<task>
-You are a spam classifier for a Telegram group chat. Your job is to determine whether a message is spam based on the context and rules below. Accuracy is critical — false positives disrupt real users, and false negatives allow spam through.
-</task>
-
-<context>
-This message was posted in {context}.
-</context>
-
-<rules>
-{rules}
-</rules>
-
-<spam_conditions>
-Flag as spam if the message matches any of these: {spam_conditions}
-</spam_conditions>
-
-<instructions>
-Analyze the message and classify it as spam or not spam. Consider the chat context — a message that would be spam in one group might be on-topic in another. When uncertain, err on the side of NOT flagging as spam.
-The message may include a <metadata> block with extra context about the sender, forwarded origin, inline buttons, hidden mentions, media, etc. Messages with suspicious inline buttons, hidden mentions, or forwarded spam are very likely spam even if the visible text looks innocent.
-</instructions>"""
+METADATA_HINT = (
+    "\n\nThe message may include a <metadata> block with extra context about the sender, "
+    "forwarded origin, inline buttons, hidden mentions, media, etc. Messages with suspicious "
+    "inline buttons, hidden mentions, or forwarded spam are very likely spam even if the visible "
+    "text looks innocent."
+)
 
 USER_PROMPT = """Classify this message:
 
@@ -68,20 +54,8 @@ class Llm:
         logger.debug("Running spam detection via LLM")
         logger.debug(f"Message preview: {message_text[:50]}...")  # Log first 50 characters for privacy
 
-        # Get config for this chat, or use default
-        if chat_id is not None and chat_id in self.spam_config.chats:
-            chat_config = self.spam_config.chats[chat_id]
-            logger.debug(f"Using custom config for chat {chat_id}")
-        else:
-            chat_config = self.spam_config.default
-            logger.debug(f"Using default config for chat {chat_id}")
-
         # Prepare the prompts
-        system_prompt = SYSTEM_PROMPT.format(
-            context=chat_config.context,
-            rules=chat_config.rules,
-            spam_conditions=chat_config.spam_conditions
-        )
+        system_prompt = self.spam_config.get_system_prompt(chat_id) + METADATA_HINT
         user_prompt = USER_PROMPT.format(message_text=message_text)
 
         try:

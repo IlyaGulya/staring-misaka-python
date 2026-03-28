@@ -100,18 +100,33 @@ class LLMConfig(BaseConfig):
 
 
 class ChatSpamConfig(BaseModel):
-    """Configuration for spam detection in a specific chat"""
-    context: str
-    rules: str
-    spam_conditions: str
+    """Per-chat spam config override. Can replace the system prompt entirely or append to default."""
+    system_prompt: str | None = None
+    extra_instructions: str | None = None
 
 
 class SpamConfig(BaseModel):
     """Complete spam detection configuration"""
     model: str = "claude-haiku-4-5-20251001"
     include_reason_in_ban: bool = False
-    default: ChatSpamConfig
+    system_prompt: str
     chats: Dict[int, ChatSpamConfig] = {}
+
+    def get_system_prompt(self, chat_id: int | None = None) -> str:
+        """Get the effective system prompt for a chat.
+
+        Per-chat config can:
+        - Replace the prompt entirely via system_prompt
+        - Append to the default via extra_instructions
+        - Or inherit the default as-is
+        """
+        if chat_id is not None and chat_id in self.chats:
+            chat_config = self.chats[chat_id]
+            if chat_config.system_prompt is not None:
+                return chat_config.system_prompt
+            if chat_config.extra_instructions is not None:
+                return f"{self.system_prompt}\n\n{chat_config.extra_instructions}"
+        return self.system_prompt
 
 
 def load_spam_config(path: str) -> SpamConfig:

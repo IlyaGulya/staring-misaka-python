@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import logging
 
 from llm import Llm, create_llm, SpamCheckResponse
-from config import Config, ChatSpamConfig, SpamConfig
+from config import Config, SpamConfig
 
 
 class TestLlmPromptAndExceptionMapping:
@@ -23,10 +23,10 @@ class TestLlmPromptAndExceptionMapping:
         """Create a default spam config for testing"""
         return SpamConfig(
             model="claude-haiku-4-5-20251001",
-            default=ChatSpamConfig(
-                context="a chat where people discuss Mobile dependency injection solutions",
-                rules="Technical discussions about DI are always allowed.",
-                spam_conditions="crypto promotions, job postings, unrelated product ads"
+            system_prompt=(
+                "You are a spam classifier for a Telegram group about Mobile dependency injection solutions. "
+                "Technical discussions about DI are always allowed. "
+                "Flag as spam: crypto promotions, job postings, unrelated product ads."
             ),
             chats={}
         )
@@ -63,14 +63,9 @@ class TestLlmPromptAndExceptionMapping:
         system_content = messages[0]['content']
         user_content = messages[1]['content']
 
-        # Verify system prompt contains required elements
-        assert "<task>" in system_content
+        # Verify system prompt contains the configured prompt
         assert "spam classifier" in system_content
-        assert "<context>" in system_content
         assert "Mobile dependency injection solutions" in system_content
-        assert "<rules>" in system_content
-        assert "<spam_conditions>" in system_content
-        assert "<instructions>" in system_content
 
         # Verify user prompt contains message tags and classify instruction
         assert "Classify this message:" in user_content

@@ -4,7 +4,7 @@ import tempfile
 import os
 from pathlib import Path
 
-from config import Config, ChatSpamConfig, SpamConfig, load_spam_config
+from config import Config, SpamConfig, load_spam_config
 
 
 class TestConfigValidation:
@@ -159,22 +159,17 @@ class TestSpamConfig:
     """Test YAML spam config loading and per-chat overrides."""
 
     def test_load_spam_config_defaults(self, tmp_path):
-        """Test loading a minimal config with only defaults."""
+        """Test loading a minimal config with only system_prompt."""
         yaml_file = tmp_path / "config.yaml"
         yaml_file.write_text(
-            "default:\n"
-            "  context: test group\n"
-            "  rules: be nice\n"
-            "  spam_conditions: ads, scams\n"
+            "system_prompt: You are a spam classifier.\n"
         )
 
         config = load_spam_config(str(yaml_file))
 
         assert config.model == "claude-haiku-4-5-20251001"
         assert config.include_reason_in_ban is False
-        assert config.default.context == "test group"
-        assert config.default.rules == "be nice"
-        assert config.default.spam_conditions == "ads, scams"
+        assert config.system_prompt == "You are a spam classifier."
         assert config.chats == {}
 
     def test_load_spam_config_with_per_chat(self, tmp_path):
@@ -183,15 +178,10 @@ class TestSpamConfig:
         yaml_file.write_text(
             "model: claude-sonnet-4-6\n"
             "include_reason_in_ban: true\n"
-            "default:\n"
-            "  context: general group\n"
-            "  rules: default rules\n"
-            "  spam_conditions: default conditions\n"
+            "system_prompt: Default spam classifier prompt.\n"
             "chats:\n"
             "  -1001234567890:\n"
-            "    context: python dev group\n"
-            "    rules: tech discussions allowed\n"
-            "    spam_conditions: crypto, gambling\n"
+            "    extra_instructions: This group is about Python.\n"
         )
 
         config = load_spam_config(str(yaml_file))
@@ -199,32 +189,42 @@ class TestSpamConfig:
         assert config.model == "claude-sonnet-4-6"
         assert config.include_reason_in_ban is True
         assert -1001234567890 in config.chats
-        chat_config = config.chats[-1001234567890]
-        assert chat_config.context == "python dev group"
-        assert chat_config.rules == "tech discussions allowed"
-        assert chat_config.spam_conditions == "crypto, gambling"
+        assert config.chats[-1001234567890].extra_instructions == "This group is about Python."
 
-    def test_load_spam_config_multiple_chats(self, tmp_path):
-        """Test loading config with multiple per-chat overrides."""
+    def test_load_spam_config_per_chat_full_override(self, tmp_path):
+        """Test per-chat config with full system_prompt override."""
         yaml_file = tmp_path / "config.yaml"
         yaml_file.write_text(
-            "default:\n"
-            "  context: default\n"
-            "  rules: default\n"
-            "  spam_conditions: default\n"
+            "system_prompt: Default prompt.\n"
             "chats:\n"
             "  111:\n"
-            "    context: chat one\n"
-            "    rules: rules one\n"
-            "    spam_conditions: conditions one\n"
-            "  222:\n"
-            "    context: chat two\n"
-            "    rules: rules two\n"
-            "    spam_conditions: conditions two\n"
+            "    system_prompt: Completely custom prompt for chat 111.\n"
         )
 
         config = load_spam_config(str(yaml_file))
 
-        assert len(config.chats) == 2
-        assert config.chats[111].context == "chat one"
-        assert config.chats[222].context == "chat two"
+        assert config.get_system_prompt(111) == "Completely custom prompt for chat 111."
+        assert config.get_system_prompt(999) == "Default prompt."
+
+    def test_get_system_prompt_inheritance(self):
+        """Test get_system_prompt with append, override, and default."""
+        from config import ChatSpamConfig
+        config = SpamConfig(
+            system_prompt="Base prompt.",
+            chats={
+                1: ChatSpamConfig(extra_instructions="Extra for chat 1."),
+                2: ChatSpamConfig(system_prompt="Full override for chat 2."),
+                3: ChatSpamConfig(),  # inherits default
+            }
+        )
+
+        # Appends extra_instructions
+        assert config.get_system_prompt(1) == "Base prompt.\n\nExtra for chat 1."
+        # Full override
+        assert config.get_system_prompt(2) == "Full override for chat 2."
+        # Inherits default
+        assert config.get_system_prompt(3) == "Base prompt."
+        # Unknown chat — default
+        assert config.get_system_prompt(999) == "Base prompt."
+        # None chat_id — default
+        assert config.get_system_prompt(None) == "Base prompt."
