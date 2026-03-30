@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from lxml.etree import Element, SubElement, tostring
 
 from telethon.tl.types import (
     PeerChannel, PeerUser,
