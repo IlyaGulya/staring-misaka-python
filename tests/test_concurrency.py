@@ -535,13 +535,12 @@ class TestQueueProcessorConcurrency:
         mock_user.first_name = "Test"
         mock_telegram_client.get_entity.return_value = mock_user
 
-        # Intercept send_message to admin (happens after DB writes in _process_ban)
-        async def slow_send_message(*args, **kwargs):
+        # Intercept userbot.send_ban_command (network I/O in _process_ban)
+        async def slow_ban_command(*args, **kwargs):
             send_message_called.set()
             await send_message_can_finish.wait()
-            return MagicMock(id=999)
 
-        mock_telegram_client.send_message.side_effect = slow_send_message
+        mock_userbot.send_ban_command.side_effect = slow_ban_command
 
         processor = QueueProcessor(
             SessionFactory, mock_llm, mock_userbot, mock_telegram_client,

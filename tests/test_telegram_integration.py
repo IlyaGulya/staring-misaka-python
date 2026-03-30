@@ -103,61 +103,6 @@ class TestTelegramIntegration:
         assert len(queue_items) == 0
 
     @pytest.mark.asyncio
-    async def test_message_handler_fallback_when_no_queue_processor(self, session_factory, test_session, mock_llm, mock_userbot, mock_telegram_event, test_config):
-        """Test that message handler falls back to direct spam check when queue processor is unavailable"""
-        # Create a new user to be monitored
-        new_user = NewUser(user_id=12345, chat_id=67890)
-        test_session.add(new_user)
-        test_session.commit()
-
-        # Configure LLM
-        mock_llm.is_spam = AsyncMock(return_value=False)
-
-        # Create bot WITHOUT queue processor
-        bot = create_bot(session_factory, mock_llm, mock_userbot, test_config)
-        
-        message_handler = bot._handlers["message_handler"]
-        await message_handler(mock_telegram_event)
-        
-        # Verify LLM was called directly (message_text now includes metadata)
-        mock_llm.is_spam.assert_called_once()
-        actual_text = mock_llm.is_spam.call_args[0][0]
-        assert "Test spam message" in actual_text
-        
-        # Verify no message was added to queue (fallback doesn't use queue)
-        queue_items = test_session.query(MessageQueue).all()
-        assert len(queue_items) == 0
-        
-        # User should be auto-approved (removed from NewUser, added to ApprovedUser)
-        remaining_new_users = test_session.query(NewUser).filter_by(user_id=12345, chat_id=67890).all()
-        assert len(remaining_new_users) == 0
-        
-        approved_users = test_session.query(ApprovedUser).filter_by(user_id=12345, chat_id=67890).all()
-        assert len(approved_users) == 1
-
-    @pytest.mark.asyncio
-    async def test_message_handler_fallback_error_handling(self, session_factory, test_session, mock_llm, mock_userbot, mock_telegram_event, test_config):
-        """Test that message handler handles errors gracefully in fallback mode"""
-        # Create a new user to be monitored
-        new_user = NewUser(user_id=12345, chat_id=67890)
-        test_session.add(new_user)
-        test_session.commit()
-
-        # Configure LLM to raise an error
-        mock_llm.is_spam = AsyncMock(side_effect=Exception("API overloaded"))
-
-        # Create bot WITHOUT queue processor
-        bot = create_bot(session_factory, mock_llm, mock_userbot, test_config)
-        
-        message_handler = bot._handlers["message_handler"]
-        # Should not raise exception - should handle error gracefully
-        await message_handler(mock_telegram_event)
-        
-        # User should still be in NewUser table (error prevented processing)
-        remaining_new_users = test_session.query(NewUser).filter_by(user_id=12345, chat_id=67890).all()
-        assert len(remaining_new_users) == 1
-
-    @pytest.mark.asyncio
     async def test_admin_queue_status_command(self, session_factory, test_session, mock_llm, mock_userbot, queue_processor_with_integration, test_config):
         """Test admin queue status command"""
         # Create some queue items with different statuses

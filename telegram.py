@@ -276,42 +276,16 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
             if meta.has_data:
                 message_text = message_text + "\n" + meta.to_xml()
 
-            if client.queue_processor:
-                try:
-                    await client.queue_processor.add_message_to_queue(
-                        user_id=sender.id,
-                        chat_id=event.chat_id,
-                        message_id=event.id,
-                        message_text=message_text
-                    )
-                    logger.debug(f"Queued message from user {sender.id}")
-                except Exception as e:
-                    logger.error(f"Error adding message to queue for user {sender.id}: {str(e)}")
-            else:
-                logger.warning("Queue processor not available, falling back to direct spam check")
-                try:
-                    is_spam = await llm.is_spam(message_text)
-                    logger.debug(f"Spam check result for user {sender.id}: {is_spam}")
-
-                    if is_spam:
-                        with session_factory() as session:
-                            admin_settings = session.query(AdminSettings).first()
-                            require_approval = admin_settings.require_approval if admin_settings else False
-
-                        if require_approval:
-                            await notify_admin(sender, message_text, event)
-                        else:
-                            await process_ban(
-                                user_id=sender.id,
-                                chat_id=event.chat_id,
-                                message_id=event.id,
-                                message_text=message_text,
-                                is_automatic=True,
-                            )
-                    else:
-                        await check_user_approval(sender.id, event.chat_id)
-                except Exception as e:
-                    logger.error(f"Error in fallback spam check for user {sender.id}: {str(e)}")
+            try:
+                await client.queue_processor.add_message_to_queue(
+                    user_id=sender.id,
+                    chat_id=event.chat_id,
+                    message_id=event.id,
+                    message_text=message_text
+                )
+                logger.debug(f"Queued message from user {sender.id}")
+            except Exception as e:
+                logger.error(f"Error adding message to queue for user {sender.id}: {str(e)}")
         else:
             logger.debug(f"Message from existing user {sender.id}, ignoring")
 
@@ -457,12 +431,6 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
             session.commit()
             logger.debug(f"Ban information stored for user {user_id}")
 
-        # Async I/O — no session
-        admin_message = (
-            f"User {user_id} has been {'automatically ' if is_automatic else ''}banned "
-            f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
-        )
-        await client.send_message(config.admin_id, admin_message)
 
         return banned_user
 

@@ -297,12 +297,6 @@ class QueueProcessor:
             session.commit()
             logger.debug(f"Ban information stored for user {user_id}")
 
-        # Async I/O — no session
-        admin_message = (
-            f"User {user_id} has been {'automatically ' if is_automatic else ''}banned "
-            f"{'due to spam detection' if is_automatic else 'as per admin approval'}."
-        )
-        await self.telegram_client.send_message(self.config.admin_id, admin_message)
 
     async def _auto_approve_user(self, user_id: int, chat_id: int):
         """Auto-approve a user who passed spam check. Opens its own session."""
