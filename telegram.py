@@ -11,6 +11,7 @@ from telethon.tl.types import UpdateChannelParticipant, PeerChannel
 
 from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue, GroupSettings
 from llm import Llm
+from message_metadata import extract_metadata
 from userbot import UserBot
 
 # Configure logging
@@ -25,6 +26,7 @@ def _init_raw_events(db_path: str):
     raw_dir = Path(db_path).parent / "raw_events"
     raw_dir.mkdir(exist_ok=True)
     _raw_events_file = raw_dir / "messages.jsonl"
+
 
 
 def _dump_raw_event(event):
@@ -268,6 +270,11 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
             # Add reply context for LLM classification
             if reply_msg_text and "<original_post>" not in message_text:
                 message_text = f"<replying_to>{reply_msg_text}</replying_to>\n<message>{message_text}</message>"
+
+            # Enrich with message metadata (inline buttons, forwards, hidden mentions, media)
+            meta = extract_metadata(event.message, sender=sender)
+            if meta.has_data:
+                message_text = message_text + "\n" + meta.to_xml()
 
             if client.queue_processor:
                 try:

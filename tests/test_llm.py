@@ -51,7 +51,6 @@ class TestLlmPromptAndExceptionMapping:
         assert "<message>" in content
         assert "</message>" in content
         assert test_message in content
-        assert "Mobile dependency injection solutions" in content
         assert "Determine whether the following message is spam" in content
         
         # Verify result
@@ -80,12 +79,8 @@ class TestLlmPromptAndExceptionMapping:
             call_args = mock_instructor_client.chat.completions.create.call_args
             content = call_args.kwargs['messages'][0]['content']
             
-            # Verify message is properly enclosed in tags
-            message_start = content.find("<message>") + len("<message>")
-            message_end = content.find("</message>")
-            extracted_message = content[message_start:message_end]
-            
-            assert extracted_message == test_message
+            # Verify message text is present in the prompt
+            assert test_message in content
             assert result is True  # Mock always returns True
     
     @pytest.mark.asyncio

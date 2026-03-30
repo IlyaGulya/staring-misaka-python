@@ -35,8 +35,9 @@ class Llm:
 
         # Prepare the prompt
         prompt = (
-            "Determine whether the following message is spam. It is posted in a chat where people discuss "
-            "Mobile dependency injection solutions. \n"
+            "Determine whether the following message is spam. "
+            "Messages with suspicious inline buttons, hidden mentions, or forwarded spam are very likely spam "
+            "even if the visible text looks innocent.\n\n"
             "<message>"
             f"{message_text}"
             "</message>"

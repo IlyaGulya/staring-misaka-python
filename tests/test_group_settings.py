@@ -170,6 +170,11 @@ class TestGroupSettings:
         mock_event.chat_id = test_config.tracking_chat_ids[0]
         mock_event.id = 111
         mock_event.raw_text = "Test message"
+        mock_event.message.fwd_from = None
+        mock_event.message.reply_markup = None
+        mock_event.message.entities = None
+        mock_event.message.media = None
+        mock_event.message.message = "Test message"
         mock_sender = MagicMock()
         mock_sender.id = 12345
         mock_event.get_sender = AsyncMock(return_value=mock_sender)

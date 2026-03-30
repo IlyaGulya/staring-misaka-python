@@ -18,6 +18,11 @@ class TestTelegramIntegration:
         event.id = 111
         event.raw_text = "Test spam message"
         event.message.reply_to = None
+        event.message.fwd_from = None
+        event.message.reply_markup = None
+        event.message.entities = None
+        event.message.media = None
+        event.message.message = "Test spam message"
 
         # Mock sender
         sender = MagicMock()
@@ -59,7 +64,7 @@ class TestTelegramIntegration:
         assert queue_item.user_id == 12345
         assert queue_item.chat_id == 67890
         assert queue_item.message_id == 111
-        assert queue_item.message_text == "Test spam message"
+        assert "Test spam message" in queue_item.message_text
         assert queue_item.status == 'pending'
 
     @pytest.mark.asyncio
@@ -114,8 +119,10 @@ class TestTelegramIntegration:
         message_handler = bot._handlers["message_handler"]
         await message_handler(mock_telegram_event)
         
-        # Verify LLM was called directly
-        mock_llm.is_spam.assert_called_once_with("Test spam message")
+        # Verify LLM was called directly (message_text now includes metadata)
+        mock_llm.is_spam.assert_called_once()
+        actual_text = mock_llm.is_spam.call_args[0][0]
+        assert "Test spam message" in actual_text
         
         # Verify no message was added to queue (fallback doesn't use queue)
         queue_items = test_session.query(MessageQueue).all()
@@ -300,6 +307,11 @@ class TestCrossChannelReplyDetection:
         event.id = 111
         event.raw_text = "Лучший!!"
         event.message.reply_to.reply_to_peer_id = PeerChannel(channel_id=self.UNRELATED_CHANNEL_ID)
+        event.message.fwd_from = None
+        event.message.reply_markup = None
+        event.message.entities = None
+        event.message.media = None
+        event.message.message = "Лучший!!"
 
         sender = MagicMock()
         sender.id = 12345
@@ -355,6 +367,11 @@ class TestCrossChannelReplyDetection:
         event.id = 222
         event.raw_text = "Отличный пост!"
         event.message.reply_to.reply_to_peer_id = PeerChannel(channel_id=self.LINKED_CHANNEL_ID)
+        event.message.fwd_from = None
+        event.message.reply_markup = None
+        event.message.entities = None
+        event.message.media = None
+        event.message.message = "Отличный пост!"
 
         sender = MagicMock()
         sender.id = 12345
@@ -389,6 +406,11 @@ class TestCrossChannelReplyDetection:
         event.id = 333
         event.raw_text = "Согласен!"
         event.message.reply_to.reply_to_peer_id = PeerChannel(channel_id=self.CURRENT_CHANNEL_ID)
+        event.message.fwd_from = None
+        event.message.reply_markup = None
+        event.message.entities = None
+        event.message.media = None
+        event.message.message = "Согласен!"
 
         sender = MagicMock()
         sender.id = 12345
@@ -421,6 +443,11 @@ class TestCrossChannelReplyDetection:
         event.id = 555
         event.raw_text = "Лучший!!"
         event.message.reply_to.reply_to_peer_id = PeerChannel(channel_id=self.UNRELATED_CHANNEL_ID)
+        event.message.fwd_from = None
+        event.message.reply_markup = None
+        event.message.entities = None
+        event.message.media = None
+        event.message.message = "Лучший!!"
 
         sender = MagicMock()
         sender.id = 12345
@@ -458,6 +485,11 @@ class TestCrossChannelReplyDetection:
         event.id = 444
         event.raw_text = "Привет всем!"
         event.message.reply_to = None
+        event.message.fwd_from = None
+        event.message.reply_markup = None
+        event.message.entities = None
+        event.message.media = None
+        event.message.message = "Привет всем!"
 
         sender = MagicMock()
         sender.id = 12345

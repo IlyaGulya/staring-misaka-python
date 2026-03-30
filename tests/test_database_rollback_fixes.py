@@ -38,6 +38,11 @@ class TestTelegramHandlerRollback:
         event.chat_id = 12345
         event.id = 999
         event.raw_text = "Test message"
+        event.message.fwd_from = None
+        event.message.reply_markup = None
+        event.message.entities = None
+        event.message.media = None
+        event.message.message = "Test message"
 
         # Mock sender
         sender = MagicMock()
@@ -465,6 +470,11 @@ class TestCrossHandlerContamination:
         message_event.chat_id = -1001075815423
         message_event.id = 31330
         message_event.raw_text = "Test spam message"
+        message_event.message.fwd_from = None
+        message_event.message.reply_markup = None
+        message_event.message.entities = None
+        message_event.message.media = None
+        message_event.message.message = "Test spam message"
         sender = MagicMock()
         sender.id = 966941259
         sender.first_name = "TestUser"
