@@ -407,13 +407,9 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
         ban_type = "automatic" if is_automatic else "manual"
         logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
 
-        # Async I/O first — no session
-        reason = f"autoban by staring misaka. message: {message_text}"
-        await userbot.send_ban_command(chat_id, message_id, reason)
-
         user_name_str = await get_user_name(user_id)
 
-        # DB write — own session
+        # DB write first — get ban_id for the reason
         with session_factory() as session:
             banned_user = BannedUser(
                 user_id=user_id,
@@ -429,7 +425,12 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                 session.delete(new_user)
 
             session.commit()
-            logger.debug(f"Ban information stored for user {user_id}")
+            ban_id = banned_user.id
+            logger.debug(f"Ban information stored for user {user_id}, ban_id={ban_id}")
+
+        # Now send ban command with internal reference
+        reason = f"autoban by staring misaka. ban_id={ban_id}"
+        await userbot.send_ban_command(chat_id, message_id, reason)
 
 
         return banned_user

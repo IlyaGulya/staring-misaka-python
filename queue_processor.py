@@ -273,13 +273,9 @@ class QueueProcessor:
         ban_type = "automatic" if is_automatic else "manual"
         logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
 
-        # Async I/O first — no session
-        reason = f"autoban by staring misaka. message: {message_text}"
-        await self.userbot.send_ban_command(chat_id, message_id, reason)
-
         user_name = await self._get_user_name(user_id)
 
-        # DB write — own session
+        # DB write first — get ban_id for the reason
         with self._get_session() as session:
             banned_user = BannedUser(
                 user_id=user_id,
@@ -295,7 +291,12 @@ class QueueProcessor:
                 session.delete(new_user)
 
             session.commit()
-            logger.debug(f"Ban information stored for user {user_id}")
+            ban_id = banned_user.id
+            logger.debug(f"Ban information stored for user {user_id}, ban_id={ban_id}")
+
+        # Now send ban command with internal reference
+        reason = f"autoban by staring misaka. ban_id={ban_id}"
+        await self.userbot.send_ban_command(chat_id, message_id, reason)
 
 
     async def _auto_approve_user(self, user_id: int, chat_id: int):

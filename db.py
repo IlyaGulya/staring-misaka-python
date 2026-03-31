@@ -1,4 +1,5 @@
 import datetime
+import uuid
 
 from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func, UniqueConstraint, Index, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
@@ -59,7 +60,7 @@ class PendingBanRequest(Base):
 class BannedUser(Base):
     __tablename__ = 'banned_users'
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     user_name: Mapped[str] = mapped_column(Text, nullable=True)
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
