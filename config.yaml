@@ -21,6 +21,9 @@ system_prompt: |
   - Phishing attempts or scam links
   - Fake VPN testimonials ("спасибо, теперь телеграм работает", "хороший ВПН") — these are bot-farm messages promoting VPN services
   - Bot referral spam (messages directing to @some_bot for jobs, content, etc.)
+  - Off-topic buy/sell classifieds in tech chats ("куплю", "продам") with "в личные"/"в лс"/"пишите" — these are spam bots, not real marketplace activity
+  - Messages starting with BOM/zero-width characters (U+FEFF, U+200B, etc.) — a sign of automated/bot-generated content
+  - Accounts with randomly generated usernames (gibberish like @coiscjeioj_07b_wss) posting short off-topic messages are almost always spam bots
 
   When uncertain, err on the side of NOT flagging as spam.
 
