@@ -1,7 +1,7 @@
 import datetime
 import uuid
 
-from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, func, UniqueConstraint, Index, event, ForeignKey
+from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, Uuid, func, UniqueConstraint, Index, event, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 
 
@@ -65,7 +65,7 @@ class BannedUser(Base):
     user_name: Mapped[str] = mapped_column(Text, nullable=True)
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
-    spam_check_id: Mapped[int] = mapped_column(Integer, ForeignKey('spam_check_results.id'), nullable=True)
+    spam_check_id: Mapped[str] = mapped_column(Text, ForeignKey('spam_check_results.id'), nullable=True)
     banned_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -142,7 +142,7 @@ class GroupSettings(Base):
 class SpamCheckResult(Base):
     __tablename__ = 'spam_check_results'
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -181,7 +181,7 @@ class MessageQueue(Base):
     spam_result: Mapped[bool] = mapped_column(Boolean, nullable=True)
     spam_reason: Mapped[str] = mapped_column(Text, nullable=True)
     raw_llm_response: Mapped[str] = mapped_column(Text, nullable=True)
-    spam_check_id: Mapped[int] = mapped_column(Integer, ForeignKey('spam_check_results.id'), nullable=True)
+    spam_check_id: Mapped[str] = mapped_column(Text, ForeignKey('spam_check_results.id'), nullable=True)
 
     # Unique constraint to prevent duplicate messages from same user/chat/message
     # Performance indexes for queue processing hot paths
