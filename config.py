@@ -1,8 +1,9 @@
 import os
-from typing import List
+from typing import List, Dict
 from pathlib import Path
-from pydantic import Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from pydantic_settings import BaseSettings
+import yaml
 
 
 class BaseConfig(BaseSettings):
@@ -88,13 +89,51 @@ class SessionConfig(BaseConfig):
 class LLMConfig(BaseConfig):
     """LLM API configuration"""
     anthropic_api_key: str
-    
+    config_path: str = "config.yaml"
+
     @field_validator('anthropic_api_key')
     @classmethod
     def validate_anthropic_api_key(cls, v):
         if len(v) < 10:
             raise ValueError(f"ANTHROPIC_API_KEY appears to be too short: {len(v)} characters")
         return v
+
+
+class ChatSpamConfig(BaseModel):
+    """Per-chat spam config override. Can replace the system prompt entirely or append to default."""
+    system_prompt: str | None = None
+    extra_instructions: str | None = None
+
+
+class SpamConfig(BaseModel):
+    """Complete spam detection configuration"""
+    model: str = "claude-haiku-4-5-20251001"
+    include_reason_in_ban: bool = False
+    system_prompt: str
+    chats: Dict[int, ChatSpamConfig] = {}
+
+    def get_system_prompt(self, chat_id: int | None = None) -> str:
+        """Get the effective system prompt for a chat.
+
+        Per-chat config can:
+        - Replace the prompt entirely via system_prompt
+        - Append to the default via extra_instructions
+        - Or inherit the default as-is
+        """
+        if chat_id is not None and chat_id in self.chats:
+            chat_config = self.chats[chat_id]
+            if chat_config.system_prompt is not None:
+                return chat_config.system_prompt
+            if chat_config.extra_instructions is not None:
+                return f"{self.system_prompt}\n\n{chat_config.extra_instructions}"
+        return self.system_prompt
+
+
+def load_spam_config(path: str) -> SpamConfig:
+    """Load spam detection configuration from YAML file"""
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    return SpamConfig(**data)
 
 
 class Config(BaseConfig):
@@ -118,7 +157,8 @@ class Config(BaseConfig):
     
     # LLM API
     anthropic_api_key: str
-    
+    config_path: str = "config.yaml"
+
     @field_validator('tracking_chat_ids', mode='before')
     @classmethod
     def parse_chat_ids(cls, v):
@@ -197,6 +237,7 @@ class Config(BaseConfig):
             'userbot_session_path': '/tmp/test_userbot.session',
             'db_path': '/tmp/test.db',
             'anthropic_api_key': 'test_key_1234567890',
+            'config_path': 'config.yaml',
         }
         
         # Apply overrides
@@ -219,7 +260,8 @@ class Config(BaseConfig):
             userbot_session_path: str
             db_path: str
             anthropic_api_key: str
-            
+            config_path: str = "config.yaml"
+
             # Copy all validators
             @field_validator('api_id')
             @classmethod

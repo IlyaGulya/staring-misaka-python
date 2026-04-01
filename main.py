@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from config import load_config
+from config import load_config, load_spam_config
 from db import make_session_factory, initialize_database
 from llm import create_llm
 from telegram import create_bot
@@ -21,6 +21,10 @@ async def main():
         return 1
 
     try:
+        # Load spam detection configuration from YAML
+        spam_config = load_spam_config(config.config_path)
+        logger.info(f"Spam config loaded from {config.config_path}, model: {spam_config.model}")
+
         # Initialize components with configuration
         session_factory = make_session_factory(config)
         logger.info("Database session factory created")
@@ -29,7 +33,7 @@ async def main():
         initialize_database(session_factory, config)
         logger.info("Database initialized")
 
-        llm = create_llm(config)
+        llm = create_llm(config, spam_config)
         userbot = create_userbot(config)
 
         # Start userbot first

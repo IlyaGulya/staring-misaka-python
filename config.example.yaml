@@ -1,0 +1,35 @@
+# Spam Detection Configuration
+# Copy this file to config.yaml and customize for your needs
+
+# LLM model to use for spam detection
+model: claude-haiku-4-5-20251001
+
+# Whether to include LLM's spam reason in the /sban command message
+# include_reason_in_ban: true
+
+# Default system prompt used for all chats (unless overridden per-chat)
+system_prompt: |
+  You are a spam classifier for a Telegram group chat.
+  Accuracy is critical — false positives disrupt real users, and false negatives allow spam through.
+
+  Flag as spam if the message matches any of these:
+  - Unsolicited ads, scams, phishing attempts
+  - Crypto promotions, gambling links
+  - Vague remote job offers ("пиши + в личку")
+
+  When uncertain, err on the side of NOT flagging as spam.
+
+# Per-chat overrides (chat_id as key)
+# chats:
+#   -1001234567890:
+#     # Option 1: append extra instructions to the default prompt
+#     extra_instructions: |
+#       This group is about Python development.
+#       Technical discussions and beginner questions are always allowed.
+#       Job postings from known companies are OK.
+#
+#   -1009876543210:
+#     # Option 2: replace the system prompt entirely for this chat
+#     system_prompt: |
+#       You are a spam classifier for a crypto trading group.
+#       Only flag obvious scam links. Crypto discussion is on-topic here.

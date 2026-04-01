@@ -111,7 +111,7 @@ def main() -> None:
 
     # Start application
     print("Starting Staring Misaka bot...")
-    os.execvp("pixi", ["pixi", "run", "start"])
+    os.execvp("python", ["python", "main.py"])
 
 
 if __name__ == "__main__":

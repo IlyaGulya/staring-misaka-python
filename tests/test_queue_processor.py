@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from sqlalchemy.exc import SQLAlchemyError
 
 from queue_processor import QueueProcessor
-from db import MessageQueue, NewUser, AdminSettings, ApprovedUser, BannedUser, PendingBanRequest
+from db import MessageQueue, NewUser, AdminSettings, ApprovedUser, BannedUser, PendingBanRequest, SpamCheckResult
+from llm import SpamCheckResponse
 
 
 class TestQueueProcessor:
@@ -189,7 +190,7 @@ class TestQueueProcessor:
     async def test_process_message_not_spam_auto_approve(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm):
         """Test processing message that is not spam - should auto-approve user"""
         # Configure LLM to return not spam
-        mock_llm.is_spam.return_value = False
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Not spam", is_spam=False)
 
         await queue_processor._process_message(
             sample_message_queue.id, sample_message_queue.user_id, sample_message_queue.chat_id,
@@ -218,7 +219,7 @@ class TestQueueProcessor:
     async def test_process_message_spam_with_admin_approval(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_telegram_client):
         """Test processing spam message with admin approval required"""
         # Configure LLM to return spam
-        mock_llm.is_spam.return_value = True
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Spam detected", is_spam=True)
 
         # Set admin settings to require approval
         admin_settings = test_session.query(AdminSettings).first()
@@ -256,7 +257,7 @@ class TestQueueProcessor:
     async def test_process_message_spam_automatic_ban(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_userbot, mock_telegram_client):
         """Test processing spam message with automatic ban"""
         # Configure LLM to return spam
-        mock_llm.is_spam.return_value = True
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Spam detected", is_spam=True)
 
         # Set admin settings to not require approval
         admin_settings = test_session.query(AdminSettings).first()
@@ -371,3 +372,35 @@ class TestQueueProcessor:
             await asyncio.wait_for(task, timeout=1.0)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass  # Expected when cancelling
+
+    @pytest.mark.asyncio
+    async def test_ban_stores_spam_check_id(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_userbot, mock_telegram_client):
+        """Test that automatic ban links BannedUser to SpamCheckResult via spam_check_id."""
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Crypto scam", is_spam=True)
+        admin_settings = test_session.query(AdminSettings).first()
+        admin_settings.require_approval = False
+        test_session.commit()
+
+        mock_telegram_client.get_entity.return_value = MagicMock(username="spammer", first_name="Spam")
+
+        await queue_processor._process_message(
+            sample_message_queue.id, sample_message_queue.user_id, sample_message_queue.chat_id,
+            sample_message_queue.message_id, sample_message_queue.message_text, sample_message_queue.retry_count
+        )
+
+        # SpamCheckResult should exist
+        spam_check = test_session.query(SpamCheckResult).first()
+        assert spam_check is not None
+        assert spam_check.is_spam is True
+        assert spam_check.reason == "Crypto scam"
+
+        # BannedUser should reference it
+        banned = test_session.query(BannedUser).first()
+        assert banned is not None
+        assert banned.spam_check_id == spam_check.id
+
+        # Queue item should also reference it
+        test_session.refresh(sample_message_queue)
+        assert sample_message_queue.spam_check_id == spam_check.id
+        assert sample_message_queue.spam_reason == "Crypto scam"
+

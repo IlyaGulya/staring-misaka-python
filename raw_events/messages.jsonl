@@ -1,0 +1,9 @@
+{"ts": "2026-03-28T12:52:20.636037+00:00", "chat_id": 12345, "message": "<coroutine object AsyncMockMixin._execute_mock_call at 0x112d07d40>"}
+{"ts": "2026-03-28T12:52:22.050945+00:00", "chat_id": 67890, "message": "<MagicMock name='mock.message.to_dict()' id='4606794432'>"}
+{"ts": "2026-03-28T12:52:22.088193+00:00", "chat_id": 67890, "message": "<MagicMock name='mock.message.to_dict()' id='4605031440'>"}
+{"ts": "2026-03-28T12:52:22.102550+00:00", "chat_id": 67890, "message": "<MagicMock name='mock.message.to_dict()' id='4611537952'>"}
+{"ts": "2026-03-28T12:52:22.155554+00:00", "chat_id": -1001075815423, "message": "<MagicMock name='mock.message.to_dict()' id='4632856624'>"}
+{"ts": "2026-03-28T12:52:22.170152+00:00", "chat_id": -1001075815423, "message": "<MagicMock name='mock.message.to_dict()' id='4632635792'>"}
+{"ts": "2026-03-28T12:52:22.180912+00:00", "chat_id": -1001075815423, "message": "<MagicMock name='mock.message.to_dict()' id='4631549792'>"}
+{"ts": "2026-03-28T12:52:22.192068+00:00", "chat_id": -1001075815423, "message": "<MagicMock name='mock.message.to_dict()' id='4634951408'>"}
+{"ts": "2026-03-28T12:52:22.205090+00:00", "chat_id": -1001075815423, "message": "<MagicMock name='mock.message.to_dict()' id='4634949152'>"}

@@ -7,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from queue_processor import QueueProcessor
 from db import MessageQueue, NewUser, AdminSettings
-from llm import Llm
+from llm import Llm, SpamCheckResponse
 
 
 class TestErrorHandling:
@@ -85,7 +85,7 @@ class TestErrorHandling:
     async def test_database_error_handling(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, session_factory):
         """Test handling of database errors during processing"""
         # Configure LLM to succeed
-        mock_llm.is_spam.return_value = False
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Not spam", is_spam=False)
 
         # Since _process_message creates its own sessions, we need to make the
         # session_factory return sessions that fail on commit
@@ -132,7 +132,7 @@ class TestErrorHandling:
     async def test_telegram_client_error_handling(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_telegram_client):
         """Test handling of Telegram client errors"""
         # Configure for spam with admin approval
-        mock_llm.is_spam.return_value = True
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Spam detected", is_spam=True)
         admin_settings = test_session.query(AdminSettings).first()
         admin_settings.require_approval = True
         test_session.commit()
@@ -155,7 +155,7 @@ class TestErrorHandling:
     async def test_userbot_error_handling(self, queue_processor, test_session, sample_message_queue, sample_new_user, mock_llm, mock_userbot, mock_telegram_client):
         """Test handling of userbot errors during ban command"""
         # Configure for spam with automatic ban
-        mock_llm.is_spam.return_value = True
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Spam detected", is_spam=True)
         admin_settings = test_session.query(AdminSettings).first()
         admin_settings.require_approval = False
         test_session.commit()
@@ -196,7 +196,7 @@ class TestErrorHandling:
 
         # Now fix the error and retry
         mock_llm.is_spam.side_effect = None
-        mock_llm.is_spam.return_value = False
+        mock_llm.is_spam.return_value = SpamCheckResponse(reason="Not spam", is_spam=False)
 
         # Reset for retry
         sample_message_queue.status = 'pending'
@@ -238,10 +238,10 @@ class TestErrorHandling:
         test_session.commit()
 
         # Configure LLM to fail for some messages
-        def side_effect_func(message_text):
+        def side_effect_func(message_text, chat_id=None):
             if "message 1" in message_text:
                 raise Exception("API error for message 1")
-            return False
+            return SpamCheckResponse(reason="Not spam", is_spam=False)
 
         mock_llm.is_spam.side_effect = side_effect_func
 
@@ -297,10 +297,12 @@ class TestErrorHandling:
         test_session.commit()
 
         # Configure LLM responses
-        def llm_side_effect(message_text):
+        def llm_side_effect(message_text, chat_id=None):
             if "user 2" in message_text:
                 raise Exception("API error")
-            return "user 3" in message_text  # True for user 3, False for user 1
+            is_spam = "user 3" in message_text  # True for user 3, False for user 1
+            reason = "Spam detected" if is_spam else "Not spam"
+            return SpamCheckResponse(reason=reason, is_spam=is_spam)
 
         mock_llm.is_spam.side_effect = llm_side_effect
 
