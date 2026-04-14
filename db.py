@@ -1,7 +1,7 @@
 import datetime
 import uuid
 
-from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, Uuid, func, UniqueConstraint, Index, event, ForeignKey
+from sqlalchemy import Integer, DateTime, create_engine, Text, Boolean, Uuid, JSON, func, UniqueConstraint, Index, event, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 
 
@@ -146,6 +146,8 @@ class SpamCheckResult(Base):
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_message_text: Mapped[str] = mapped_column(Text, nullable=True)
+    message_metadata: Mapped[dict] = mapped_column(JSON, nullable=True)
     is_spam: Mapped[bool] = mapped_column(Boolean, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     raw_response: Mapped[str] = mapped_column(Text, nullable=True)
@@ -171,6 +173,8 @@ class MessageQueue(Base):
     chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
     message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_message_text: Mapped[str] = mapped_column(Text, nullable=True)
+    message_metadata: Mapped[dict] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default='pending')  # pending, processing, completed, failed
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=5)

@@ -3,6 +3,8 @@ import logging
 from datetime import datetime, timedelta, UTC
 from typing import Optional
 
+from opentelemetry.trace import Status, StatusCode
+
 from sqlalchemy.orm import Session, sessionmaker
 from telethon import TelegramClient
 
@@ -116,21 +118,52 @@ class QueueProcessor:
             item_chat_id = queue_item.chat_id
             item_message_id = queue_item.message_id
             item_message_text = queue_item.message_text
+            item_raw_message_text = queue_item.raw_message_text
+            item_metadata = queue_item.message_metadata
+            item_created_at = queue_item.created_at
             item_retry_count = queue_item.retry_count
 
-        await self._process_message(item_id, item_user_id, item_chat_id, item_message_id, item_message_text, item_retry_count)
+        await self._process_message(
+            item_id, item_user_id, item_chat_id, item_message_id, item_message_text,
+            item_retry_count, item_raw_message_text, item_metadata, item_created_at,
+        )
 
-    async def _process_message(self, item_id: int, user_id: int, chat_id: int, message_id: int, message_text: str, retry_count: int):
+    async def _process_message(self, item_id: int, user_id: int, chat_id: int, message_id: int, message_text: str, retry_count: int, raw_message_text: Optional[str] = None, message_metadata: Optional[dict] = None, created_at: Optional[datetime] = None):
         """Process a message from the queue. No session held across awaits."""
-        with tracer.start_as_current_span("process_message", attributes={
+        attrs = {
             "queue.item_id": item_id,
             "user.id": user_id,
             "chat.id": chat_id,
             "message.id": message_id,
-        }) as span:
-            await self._process_message_inner(item_id, user_id, chat_id, message_id, message_text, retry_count, span)
+        }
+        if raw_message_text:
+            attrs["message.text"] = raw_message_text
+        if message_metadata:
+            sender = message_metadata.get("sender") or {}
+            if sender.get("username"):
+                attrs["user.username"] = sender["username"]
+            if sender.get("name"):
+                attrs["user.name"] = sender["name"]
+            if message_metadata.get("chat_title"):
+                attrs["chat.title"] = message_metadata["chat_title"]
+            if message_metadata.get("message_date"):
+                attrs["message.date"] = message_metadata["message_date"]
+        if created_at:
+            # SQLite stores naive datetimes; treat as UTC for the wait calc
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            wait_ms = int((datetime.now(UTC) - created_at).total_seconds() * 1000)
+            attrs["queue.wait_ms"] = wait_ms
 
-    async def _process_message_inner(self, item_id, user_id, chat_id, message_id, message_text, retry_count, span):
+        with tracer.start_as_current_span("process_message", attributes=attrs) as span:
+            try:
+                await self._process_message_inner(item_id, user_id, chat_id, message_id, message_text, retry_count, span, raw_message_text=raw_message_text, message_metadata=message_metadata)
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                raise
+
+    async def _process_message_inner(self, item_id, user_id, chat_id, message_id, message_text, retry_count, span, raw_message_text: Optional[str] = None, message_metadata: Optional[dict] = None):
         logger.debug(f"Processing queue item {item_id} for user {user_id}")
 
         # Phase 1: DB reads + mark as processing
@@ -221,6 +254,8 @@ class QueueProcessor:
                 user_id=user_id,
                 chat_id=chat_id,
                 message_text=message_text,
+                raw_message_text=raw_message_text,
+                message_metadata=message_metadata,
                 is_spam=resp.is_spam,
                 reason=resp.reason,
                 raw_response=resp.model_dump_json(),
@@ -378,7 +413,7 @@ class QueueProcessor:
                 logger.error(f"Error fetching user name for user_id {user_id}: {str(e)}")
             return f"User_{user_id}"
 
-    async def add_message_to_queue(self, user_id: int, chat_id: int, message_id: int, message_text: str) -> MessageQueue:
+    async def add_message_to_queue(self, user_id: int, chat_id: int, message_id: int, message_text: str, raw_message_text: Optional[str] = None, metadata: Optional[dict] = None) -> MessageQueue:
         """Add a message to the processing queue using UPSERT to handle duplicates.
 
         Uses SQLite's INSERT OR IGNORE to atomically handle duplicate messages.
@@ -393,6 +428,8 @@ class QueueProcessor:
             'chat_id': chat_id,
             'message_id': message_id,
             'message_text': message_text,
+            'raw_message_text': raw_message_text,
+            'message_metadata': metadata,
             'status': 'pending',
             'created_at': datetime.now(UTC)
         }

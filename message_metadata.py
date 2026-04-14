@@ -47,6 +47,8 @@ class InlineButton:
 @dataclass
 class MessageMetadata:
     sender: SenderInfo | None = None
+    chat_title: str | None = None
+    message_date: str | None = None  # ISO format
     forward: ForwardInfo | None = None
     inline_buttons: list[InlineButton] = field(default_factory=list)
     hidden_mention_ids: list[int] = field(default_factory=list)
@@ -60,6 +62,8 @@ class MessageMetadata:
     def has_data(self) -> bool:
         return bool(
             self.sender
+            or self.chat_title
+            or self.message_date
             or self.forward
             or self.inline_buttons
             or self.hidden_mention_ids
@@ -69,6 +73,41 @@ class MessageMetadata:
             or self.views is not None
             or self.forwards is not None
         )
+
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-safe dict for DB storage."""
+        result: dict = {}
+        if self.sender:
+            result['sender'] = {'name': self.sender.name, 'username': self.sender.username}
+        if self.chat_title:
+            result['chat_title'] = self.chat_title
+        if self.message_date:
+            result['message_date'] = self.message_date
+        if self.forward:
+            result['forward'] = {
+                'channel_id': self.forward.channel_id,
+                'user_id': self.forward.user_id,
+                'name': self.forward.name,
+                'post': self.forward.post,
+            }
+        if self.inline_buttons:
+            result['inline_buttons'] = [
+                {'text': b.text, 'url': b.url, 'is_callback': b.is_callback}
+                for b in self.inline_buttons
+            ]
+        if self.hidden_mention_ids:
+            result['hidden_mention_ids'] = self.hidden_mention_ids
+        if self.text_urls:
+            result['text_urls'] = [{'text': t, 'url': u} for t, u in self.text_urls]
+        if self.media_type:
+            result['media_type'] = self.media_type
+        if self.via_bot_id is not None:
+            result['via_bot_id'] = self.via_bot_id
+        if self.views is not None:
+            result['views'] = self.views
+        if self.forwards is not None:
+            result['forwards'] = self.forwards
+        return result
 
     def to_xml(self) -> str:
         """Build XML-like string with metadata and a legend of present fields."""

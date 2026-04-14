@@ -275,6 +275,20 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
 
             # Enrich with message metadata (inline buttons, forwards, hidden mentions, media)
             meta = extract_metadata(event.message, sender=sender)
+
+            # Populate chat_title and message_date for tracing/audit
+            try:
+                chat = await event.get_chat()
+                title = getattr(chat, 'title', None)
+                if isinstance(title, str):
+                    meta.chat_title = title
+            except Exception as e:
+                logger.debug(f"Could not fetch chat info: {e}")
+            msg_date = getattr(event.message, 'date', None)
+            if isinstance(msg_date, datetime):
+                meta.message_date = msg_date.isoformat()
+
+            raw_message_text = event.raw_text
             if meta.has_data:
                 message_text = message_text + "\n" + meta.to_xml()
 
@@ -283,7 +297,9 @@ def create_bot(session_factory: sessionmaker, llm: Llm, userbot: UserBot, config
                     user_id=sender.id,
                     chat_id=event.chat_id,
                     message_id=event.id,
-                    message_text=message_text
+                    message_text=message_text,
+                    raw_message_text=raw_message_text,
+                    metadata=meta.to_dict() if meta.has_data else None,
                 )
                 logger.debug(f"Queued message from user {sender.id}")
             except Exception as e:

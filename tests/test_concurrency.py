@@ -96,13 +96,13 @@ class TestQueueProcessorConcurrency:
         original_process_1 = processor1._process_message
         original_process_2 = processor2._process_message
 
-        async def track_process_1(item_id, user_id, chat_id, message_id, message_text, retry_count):
+        async def track_process_1(item_id, user_id, chat_id, message_id, message_text, retry_count, *args, **kwargs):
             processed_messages_1.append(item_id)
-            return await original_process_1(item_id, user_id, chat_id, message_id, message_text, retry_count)
+            return await original_process_1(item_id, user_id, chat_id, message_id, message_text, retry_count, *args, **kwargs)
 
-        async def track_process_2(item_id, user_id, chat_id, message_id, message_text, retry_count):
+        async def track_process_2(item_id, user_id, chat_id, message_id, message_text, retry_count, *args, **kwargs):
             processed_messages_2.append(item_id)
-            return await original_process_2(item_id, user_id, chat_id, message_id, message_text, retry_count)
+            return await original_process_2(item_id, user_id, chat_id, message_id, message_text, retry_count, *args, **kwargs)
 
         processor1._process_message = track_process_1
         processor2._process_message = track_process_2
@@ -169,10 +169,10 @@ class TestQueueProcessorConcurrency:
         # Track processed messages
         original_process = processor._process_message
 
-        async def track_process(item_id, user_id, chat_id, message_id, message_text, retry_count):
+        async def track_process(item_id, user_id, chat_id, message_id, message_text, retry_count, *args, **kwargs):
             nonlocal processed_count
             processed_count += 1
-            return await original_process(item_id, user_id, chat_id, message_id, message_text, retry_count)
+            return await original_process(item_id, user_id, chat_id, message_id, message_text, retry_count, *args, **kwargs)
 
         processor._process_message = track_process
 
