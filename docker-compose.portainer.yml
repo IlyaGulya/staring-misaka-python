@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     env_file:
       - stack.env
+    environment:
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://host.docker.internal:4318/v1/traces
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - staring_misaka_secret:/secret
       - staring_misaka_data:/data

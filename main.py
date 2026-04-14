@@ -1,5 +1,12 @@
 import asyncio
 import logging
+import os
+
+from openinference.instrumentation.anthropic import AnthropicInstrumentor
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 from config import load_config, load_spam_config
 from db import make_session_factory, initialize_database
@@ -32,6 +39,17 @@ async def main():
         # Initialize database with default settings
         initialize_database(session_factory, config)
         logger.info("Database initialized")
+
+        # Initialize OpenTelemetry tracing (if configured)
+        otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get("PHOENIX_COLLECTOR_ENDPOINT")
+        if otel_endpoint:
+            tracer_provider = TracerProvider()
+            tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=otel_endpoint)))
+            trace.set_tracer_provider(tracer_provider)
+            AnthropicInstrumentor().instrument()
+            logger.info(f"OpenTelemetry tracing enabled -> {otel_endpoint}")
+        else:
+            logger.info("OpenTelemetry tracing disabled (OTEL_EXPORTER_OTLP_TRACES_ENDPOINT not set)")
 
         llm = create_llm(config, spam_config)
         userbot = create_userbot(config)
