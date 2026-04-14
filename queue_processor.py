@@ -8,6 +8,7 @@ from telethon import TelegramClient
 
 from db import MessageQueue, NewUser, PendingBanRequest, AdminSettings, ApprovedUser, BannedUser, GroupSettings, SpamCheckResult
 from llm import Llm
+from tracing import tracer
 from userbot import UserBot
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,15 @@ class QueueProcessor:
 
     async def _process_message(self, item_id: int, user_id: int, chat_id: int, message_id: int, message_text: str, retry_count: int):
         """Process a message from the queue. No session held across awaits."""
+        with tracer.start_as_current_span("process_message", attributes={
+            "queue.item_id": item_id,
+            "user.id": user_id,
+            "chat.id": chat_id,
+            "message.id": message_id,
+        }) as span:
+            await self._process_message_inner(item_id, user_id, chat_id, message_id, message_text, retry_count, span)
+
+    async def _process_message_inner(self, item_id, user_id, chat_id, message_id, message_text, retry_count, span):
         logger.debug(f"Processing queue item {item_id} for user {user_id}")
 
         # Phase 1: DB reads + mark as processing
@@ -176,8 +186,13 @@ class QueueProcessor:
 
         # Phase 2: Async I/O — no session held
         try:
-            logger.debug(f"Running spam check for user {user_id}")
-            resp = await self.llm.is_spam(message_text, chat_id=chat_id)
+            with tracer.start_as_current_span("llm_spam_check", attributes={
+                "llm.model": self.llm.spam_config.model,
+            }):
+                logger.debug(f"Running spam check for user {user_id}")
+                resp = await self.llm.is_spam(message_text, chat_id=chat_id)
+            span.set_attribute("spam.is_spam", resp.is_spam)
+            span.set_attribute("spam.reason", resp.reason)
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error processing queue item {item_id}: {error_msg}")
@@ -292,53 +307,65 @@ class QueueProcessor:
     async def _process_ban(self, user_id: int, chat_id: int, message_id: int, message_text: str, is_automatic: bool, spam_reason: Optional[str] = None, spam_check_id: Optional[int] = None):
         """Process a ban for a user. Opens its own session."""
         ban_type = "automatic" if is_automatic else "manual"
-        logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
+        with tracer.start_as_current_span("process_ban", attributes={
+            "user.id": user_id,
+            "chat.id": chat_id,
+            "ban.type": ban_type,
+            "ban.spam_check_id": spam_check_id or "",
+        }):
+            logger.info(f"[BAN] user_id={user_id} chat_id={chat_id} type={ban_type}")
 
-        user_name = await self._get_user_name(user_id)
+            user_name = await self._get_user_name(user_id)
 
-        # DB write first — get ban_id for the reason
-        with self._get_session() as session:
-            banned_user = BannedUser(
-                user_id=user_id,
-                user_name=user_name,
-                chat_id=chat_id,
-                message_text=message_text,
-                spam_check_id=spam_check_id,
-                banned_at=datetime.now(UTC)
-            )
-            session.add(banned_user)
+            # DB write first — get ban_id for the reason
+            with tracer.start_as_current_span("save_banned_user"):
+                with self._get_session() as session:
+                    banned_user = BannedUser(
+                        user_id=user_id,
+                        user_name=user_name,
+                        chat_id=chat_id,
+                        message_text=message_text,
+                        spam_check_id=spam_check_id,
+                        banned_at=datetime.now(UTC)
+                    )
+                    session.add(banned_user)
 
-            new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
-            if new_user:
-                session.delete(new_user)
+                    new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+                    if new_user:
+                        session.delete(new_user)
 
-            session.commit()
-            ban_id = banned_user.id
-            logger.debug(f"Ban information stored for user {user_id}, ban_id={ban_id}")
+                    session.commit()
+                    ban_id = banned_user.id
+                    logger.debug(f"Ban information stored for user {user_id}, ban_id={ban_id}")
 
-        # Now send ban command with internal reference
-        reason = f"autoban by staring misaka. ban_id={ban_id}"
-        await self.userbot.send_ban_command(chat_id, message_id, reason)
+            # Now send ban command with internal reference
+            with tracer.start_as_current_span("send_ban_command"):
+                reason = f"autoban by staring misaka. ban_id={ban_id}"
+                await self.userbot.send_ban_command(chat_id, message_id, reason)
 
 
     async def _auto_approve_user(self, user_id: int, chat_id: int):
         """Auto-approve a user who passed spam check. Opens its own session."""
-        logger.debug(f"Auto-approving user {user_id} in chat {chat_id}")
+        with tracer.start_as_current_span("auto_approve_user", attributes={
+            "user.id": user_id,
+            "chat.id": chat_id,
+        }):
+            logger.debug(f"Auto-approving user {user_id} in chat {chat_id}")
 
-        with self._get_session() as session:
-            new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
-            if new_user:
-                session.delete(new_user)
-                logger.debug(f"User {user_id} removed from monitoring")
+            with self._get_session() as session:
+                new_user = session.query(NewUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+                if new_user:
+                    session.delete(new_user)
+                    logger.debug(f"User {user_id} removed from monitoring")
 
-            existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
-            if not existing_approval:
-                approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now(UTC))
-                session.add(approved_user)
-                logger.debug(f"User {user_id} added to approved list")
+                existing_approval = session.query(ApprovedUser).filter_by(user_id=user_id, chat_id=chat_id).first()
+                if not existing_approval:
+                    approved_user = ApprovedUser(user_id=user_id, chat_id=chat_id, approved_at=datetime.now(UTC))
+                    session.add(approved_user)
+                    logger.debug(f"User {user_id} added to approved list")
 
-            session.commit()
-            logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
+                session.commit()
+                logger.info(f"[AUTO-APPROVE] user_id={user_id} chat_id={chat_id}")
 
     async def _get_user_name(self, user_id: int) -> Optional[str]:
         try:

@@ -13,6 +13,7 @@ from telethon.tl.types import UpdateChannelParticipant, PeerChannel
 from db import NewUser, PendingBanRequest, BannedUser, AdminSettings, ApprovedUser, MessageQueue, GroupSettings, SpamCheckResult
 from llm import Llm
 from message_metadata import extract_metadata
+from tracing import tracer
 from userbot import UserBot
 
 # Configure logging
