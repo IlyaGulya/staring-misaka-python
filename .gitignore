@@ -11,3 +11,8 @@ telegram_bot.db
 *.session
 *.secret
 .idea
+
+# Bun rewrite runtime and dependencies
+rewrite/node_modules/
+rewrite/data/
+rewrite/.env
