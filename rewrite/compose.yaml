@@ -1,0 +1,36 @@
+services:
+  misaka:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    env_file:
+      - .env
+    environment:
+      MODE: ${MODE:-shadow}
+      ALLOW_LIVE_MODERATION: ${ALLOW_LIVE_MODERATION:-false}
+      ACKNOWLEDGE_OBSERVER_GAP: ${ACKNOWLEDGE_OBSERVER_GAP:-false}
+      DB_PATH: /app/data/misaka.sqlite
+      JOURNAL_PATH: /app/data/events.jsonl
+      SPAM_CONFIG_PATH: /app/config.yaml
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+    volumes:
+      - misaka-data:/app/data
+      - type: bind
+        source: ${SPAM_CONFIG_FILE:-../config.yaml}
+        target: /app/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+
+volumes:
+  misaka-data:
