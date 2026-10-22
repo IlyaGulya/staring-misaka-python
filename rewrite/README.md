@@ -124,9 +124,11 @@ docker compose up -d
 
 ### CI и отдельный образ
 
-`.github/workflows/rewrite.yml` запускается на PR, push в `master` при изменении `rewrite/**` или самого workflow, а также вручную. Сначала Bun 1.4.2 устанавливает frozen dependencies без lifecycle scripts, затем выполняются форматирование, TypeScript и тесты. После этого отдельные native runners собирают и проверяют `linux/amd64` и `linux/arm64`; эмуляция в CI не нужна.
+`.github/workflows/rewrite.yml` запускается на PR, push в `master` при изменении `rewrite/**` или самого workflow, push тега `bun-*`, а также вручную. Сначала Bun 1.4.2 устанавливает frozen dependencies без lifecycle scripts, затем выполняются форматирование, TypeScript и тесты. После этого отдельные native runners собирают и проверяют `linux/amd64` и `linux/arm64`; эмуляция в CI не нужна.
 
-Только push в `master` исходного, не fork-репозитория разрешает публикацию в `ghcr.io/<owner>/<repo>-bun`. Два проверенных образа передаются publisher через artifacts, без повторной сборки. После успешных проверок обеих архитектур создаются `sha-<полный commit SHA>-amd64`, `sha-<полный commit SHA>-arm64` и общий multiarch tag `sha-<полный commit SHA>`. Теги `latest`/`master` нового образа не создаются; старый image workflow и его имя не меняются. Registry write token доступен только publisher. PR и `workflow_dispatch` ничего не публикуют.
+Push в `master` или явный release tag `bun-*` исходного, не fork-репозитория разрешает публикацию в `ghcr.io/<owner>/<repo>-bun`. Два проверенных образа передаются publisher через artifacts, без повторной сборки. После успешных проверок обеих архитектур создаются `sha-<полный commit SHA>-amd64`, `sha-<полный commit SHA>-arm64` и общий multiarch tag `sha-<полный commit SHA>`. Теги `latest`/`master` нового образа не создаются; старый image workflow и его имя не меняются. Registry write token доступен только publisher. PR и `workflow_dispatch` ничего не публикуют.
+
+Для изолированного выпуска используйте тег `bun-<полный commit SHA>` на проверяемом commit и push только этого тега. Он не совпадает с legacy-триггером `v*.*.*`, поэтому не переиздаёт Python-образ и не требует merge в `master`. Это разрешение на публикацию Bun-образа, не на production rollout. Применять образ в инфраструктуре следует по полученному registry digest после успешного publisher.
 
 Воспроизведение проверки из `rewrite/`:
 
