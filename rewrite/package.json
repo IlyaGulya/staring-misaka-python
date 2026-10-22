@@ -8,9 +8,10 @@
   "scripts": {
     "start": "bun run src/main.ts",
     "check": "tsc --noEmit",
-    "format": "prettier --write src tests package.json tsconfig.json .prettierrc.json",
-    "format:check": "prettier --check src tests package.json tsconfig.json .prettierrc.json",
+    "format": "prettier --write src tests scripts package.json tsconfig.json .prettierrc.json",
+    "format:check": "prettier --check src tests scripts package.json tsconfig.json .prettierrc.json",
     "test": "bun test",
+    "smoke:image": "bash scripts/smoke-image.sh",
     "import": "bun run src/import.ts",
     "observer-login": "bun run src/observer-login.ts"
   },

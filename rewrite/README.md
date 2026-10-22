@@ -118,9 +118,26 @@ docker compose build
 docker compose up -d
 ```
 
-Compose использует закреплённый образ Bun, непривилегированного пользователя, read-only rootfs, отдельный writable volume `/app/data` и read-only YAML. `.env`, базы и сессии исключены из build context. Для direct Bun и контейнера пути задаются отдельно в `.env.example`.
+Базовый Bun-образ закреплён по multiarch digest, зависимости — по `bun.lock`. Compose использует непривилегированного пользователя, read-only rootfs, отдельный writable volume `/app/data` и read-only YAML. `.env`, базы и сессии исключены из build context. Для direct Bun и контейнера пути задаются отдельно в `.env.example`.
 
 Зависимости устанавливаются с `--frozen-lockfile --production --ignore-scripts`: используются поставляемые prebuilds/JS-fallbacks, без нативной сборки в slim-образе. Это сохраняет необходимые GramJS зависимости и на Linux/arm64.
+
+### CI и отдельный образ
+
+`.github/workflows/rewrite.yml` запускается на PR, push в `master` при изменении `rewrite/**` или самого workflow, а также вручную. Сначала Bun 1.4.2 устанавливает frozen dependencies без lifecycle scripts, затем выполняются форматирование, TypeScript и тесты. После этого отдельные native runners собирают и проверяют `linux/amd64` и `linux/arm64`; эмуляция в CI не нужна.
+
+Только push в `master` исходного, не fork-репозитория разрешает публикацию в `ghcr.io/<owner>/<repo>-bun`. Два проверенных образа передаются publisher через artifacts, без повторной сборки. После успешных проверок обеих архитектур создаются `sha-<полный commit SHA>-amd64`, `sha-<полный commit SHA>-arm64` и общий multiarch tag `sha-<полный commit SHA>`. Теги `latest`/`master` нового образа не создаются; старый image workflow и его имя не меняются. Registry write token доступен только publisher. PR и `workflow_dispatch` ничего не публикуют.
+
+Воспроизведение проверки из `rewrite/`:
+
+```sh
+docker build -t misaka-bun:smoke .
+bun run smoke:image misaka-bun:smoke
+```
+
+Smoke запускает production-образ без внешней сети (`--network none`), с read-only rootfs и временными writable `/app/data` и `/tmp`; скрипты монтируются read-only, host credentials и базы не передаются. Настоящий CLI работает с локальными Telegram/Anthropic fixtures: `--check-config` без базы/сети, clean → edit → spam без постоянного доверия, shadow-планы без исполнения, SIGTERM, повторный старт без повторной классификации, SQLite integrity и экспорт решений в JSONL. Обязателен non-root UID. Это проверка исполняемого образа, не качества LLM или реальной доставки Telegram.
+
+### Production Kubernetes
 
 Production работает в K3s на `misaka`, namespace `staring-misaka`; Compose выше — локальный способ запуска, не production deployment. Инфраструктура находится в соседнем `misaka.network`: `infras/personal/sites/hetzner/apps/staring-misaka.values.cue`. Текущий Python-процесс использует `/data/telegram_bot.db` на PVC. Новый образ, Secret/env, YAML и writable paths нужно подключать через этот Kubernetes deployment, не запускать рядом второй production Compose.
 
