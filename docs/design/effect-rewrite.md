@@ -266,3 +266,17 @@ Provider — прямой Anthropic Messages API, модель `claude-sonnet-4-
 Локально после SDK cutover собраны `linux/arm64` и `linux/amd64` образы; native arm64 smoke прошёл. Локальный amd64 smoke под эмуляцией на arm64 прошёл config-only, но завершился по 15-секундному deadline запуска receiver до первого запроса Telegram. Причина локальной задержки не установлена; на нативном GitHub runner она не воспроизвелась.
 
 [GitHub Actions run 39806105587](https://github.com/IlyaGulya/staring-misaka-python/actions/runs/39806105587) для [PR #1](https://github.com/IlyaGulya/staring-misaka-python/pull/1), исходный commit `ccd0434`: Bun suite — 96 pass / 0 fail, TypeScript и форматирование прошли; оба native Linux image jobs завершились успешно. На каждой архитектуре настоящий CLI подтвердил clean → edit → spam, UID 1000, два локальных model requests, рестарт без повторов, три shadow plans без исполнения и JSONL export. Publisher пропущен по условию PR. `master` не изменён; GHCR publication и Kubernetes rollout этим прогоном не выполнялись и не проверялись.
+
+## 12. Изолированная публикация
+
+Commit `4bb6a24b63c613d30849e5dad1d2e32437c882cd`, release tag `bun-4bb6a24b63c613d30849e5dad1d2e32437c882cd`: [GitHub Actions run 39807254313](https://github.com/IlyaGulya/staring-misaka-python/actions/runs/39807254313) успешно выполнил Bun checks, оба native Linux build/smoke jobs, передачу проверенных images через artifacts и publisher. GHCR получил два architecture tags и общий `sha-4bb6a24b63c613d30849e5dad1d2e32437c882cd`.
+
+Проверенный multiarch reference:
+
+```text
+ghcr.io/ilyagulya/staring-misaka-python-bun@sha256:00ea1236b2e6fcc036df8ac9db8b7c7671857e561a04ee4142787f745a2df4a7
+```
+
+Registry manifest проверен отдельно через `docker buildx imagetools inspect`: содержит `linux/amd64` и `linux/arm64`. Образ затем скачан из GHCR по этому index digest с `--platform linux/arm64` и запущен через `bun run smoke:image`: PASS, UID 1000, clean → edit → spam, два synthetic model requests, рестарт без повторов, три shadow plans, ноль исполненных действий, JSONL PASS. После публикации локально исполнялся arm64-вариант; amd64 runtime проверен нативным CI до публикации, не локальной эмуляцией.
+
+Для release commit в GitHub зафиксированы только Bun tag-push и PR runs. Legacy workflow не запускался; удалённый `master` не изменялся. PR остаётся отдельным от production. Kubernetes, реальные Telegram-действия и платные model requests этот выпуск не затрагивал.
