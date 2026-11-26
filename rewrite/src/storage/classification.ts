@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Schema } from "effect";
-import { AppError, type Classification, type ClassificationJob, type Snapshot } from "../domain";
+import {
+  AppError,
+  type Classification,
+  type ClassificationJob,
+  type ContextMessage,
+  type Snapshot,
+} from "../domain";
 import { StorageContext } from "./context";
 import type {
   SubjectRecord,
@@ -17,8 +23,153 @@ import {
   ClassificationSchema,
 } from "./codecs";
 import { addAction } from "./actions";
+import { isDailyBudgetExceeded, recordUsage } from "./budget";
+import { assessRevisionRisk, isSubstantiveMessage } from "./reputation";
+
+const CONTEXT_MAX_MESSAGES = 10;
+const CONTEXT_MAX_CHARS = 8_000;
+const CONTEXT_MESSAGE_MAX_CHARS = 1_000;
+const CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const CONTEXT_SAME_AUTHOR_RESERVE = 3;
+const BURST_WINDOW_MS = 30_000;
+
+interface PriorContextRow {
+  seq: number;
+  messageId: number;
+  userId: number | null;
+  text: string;
+  metadata: string;
+  stamp: number;
+}
+
+function senderLabel(metadata: Record<string, unknown>, userId: number | null): string | undefined {
+  const sender = metadata.sender;
+  if (sender && typeof sender === "object") {
+    const record = sender as Record<string, unknown>;
+    const username =
+      typeof record.username === "string" && record.username ? `@${record.username}` : "";
+    const name = [record.firstName, record.lastName]
+      .filter((part): part is string => typeof part === "string" && part.length > 0)
+      .join(" ");
+    if (name && username) return `${name} (${username})`;
+    if (name) return name;
+    if (username) return username;
+  }
+  return userId !== null ? `user:${userId}` : undefined;
+}
+
+/** Collect strictly causal, past-only chat context (reply parent + same-author + recent chat). */
+function buildCausalContext(
+  context: StorageContext,
+  canonicalChatId: number,
+  subjectUserId: number,
+  firstTargetSeq: number,
+  targetMessageIds: ReadonlySet<number>,
+  replyParentIds: ReadonlySet<number>,
+  targetMinStamp: number,
+): { readonly context: ContextMessage[]; readonly truncated: boolean } {
+  const recentWindowStart = Math.max(0, targetMinStamp - CONTEXT_WINDOW_MS);
+  const candidates = context.all<PriorContextRow>(
+    `
+    SELECT r.seq, r.messageId, r.userId, r.text, r.metadata, m.stamp
+    FROM revisions r
+    JOIN messages m USING(chatId, messageId, revision)
+    WHERE r.chatId IN (SELECT aliasId FROM chat_aliases WHERE canonicalId = ?)
+      AND r.seq < ?
+      AND r.actorKind != 'unknown'
+      AND (m.stamp >= ? OR r.messageId IN (SELECT value FROM json_each(?)))
+    ORDER BY r.seq DESC
+    LIMIT 64
+  `,
+    canonicalChatId,
+    firstTargetSeq,
+    recentWindowStart,
+    JSON.stringify([...replyParentIds]),
+  );
+
+  // Exclude target messages themselves and keep only the latest revision per prior messageId.
+  const seen = new Set<number>(targetMessageIds);
+  const unique: PriorContextRow[] = [];
+  for (const row of candidates) {
+    if (seen.has(row.messageId)) continue;
+    seen.add(row.messageId);
+    unique.push(row);
+  }
+  if (unique.length === 0) return { context: [], truncated: false };
+
+  const replyRows: PriorContextRow[] = [];
+  const sameAuthorRows: PriorContextRow[] = [];
+  const otherRows: PriorContextRow[] = [];
+  for (const row of unique) {
+    if (replyParentIds.has(row.messageId)) {
+      replyRows.push(row);
+    } else if (row.userId === subjectUserId) {
+      sameAuthorRows.push(row);
+    } else {
+      otherRows.push(row);
+    }
+  }
+
+  const picked: PriorContextRow[] = [];
+  const pickedIds = new Set<number>();
+  const add = (row: PriorContextRow): void => {
+    if (picked.length >= CONTEXT_MAX_MESSAGES || pickedIds.has(row.messageId)) return;
+    picked.push(row);
+    pickedIds.add(row.messageId);
+  };
+
+  for (const row of replyRows) add(row);
+  for (const row of sameAuthorRows.slice(0, CONTEXT_SAME_AUTHOR_RESERVE)) add(row);
+  // Fill remaining slots with newest surrounding messages (both same-author and other chat users).
+  for (const row of unique) add(row);
+
+  let truncated = unique.length > picked.length;
+  // Enforce char budget, reserving reply parents first.
+  const budgeted: PriorContextRow[] = [];
+  let remainingChars = CONTEXT_MAX_CHARS;
+  const prioritized = [
+    ...picked.filter((row) => replyParentIds.has(row.messageId)),
+    ...picked.filter((row) => !replyParentIds.has(row.messageId)),
+  ];
+  for (const row of prioritized) {
+    const clippedLength = Math.min(row.text.length, CONTEXT_MESSAGE_MAX_CHARS);
+    if (clippedLength > remainingChars) {
+      truncated = true;
+      continue;
+    }
+    remainingChars -= clippedLength;
+    budgeted.push(row);
+  }
+
+  budgeted.sort((a, b) => a.seq - b.seq);
+  const messages: ContextMessage[] = budgeted.map((row) => {
+    let parsedMeta: Record<string, unknown> = {};
+    try {
+      parsedMeta = decode(row.metadata, ObjectSchema);
+    } catch {
+      parsedMeta = {};
+    }
+    const text = row.text.slice(0, CONTEXT_MESSAGE_MAX_CHARS);
+    if (text.length < row.text.length) truncated = true;
+    const sender = senderLabel(parsedMeta, row.userId);
+    return {
+      messageId: row.messageId,
+      ...(row.userId === null ? {} : { userId: row.userId }),
+      sameAuthor: row.userId === subjectUserId,
+      isReplyParent: replyParentIds.has(row.messageId),
+      ...(sender ? { sender } : {}),
+      occurredAt: row.stamp,
+      text,
+    };
+  });
+  return { context: messages, truncated };
+}
 
 export function claimClassification(context: StorageContext): ClassificationJob | undefined {
+  if (isDailyBudgetExceeded(context)) {
+    return undefined;
+  }
+
   let row = context.get<ClassificationSnapshotRecord>(
     `
   SELECT j.*,s.payload
@@ -33,8 +184,14 @@ export function claimClassification(context: StorageContext): ClassificationJob 
 `,
     context.now(),
   );
+
   if (!row) {
-    const subject = context.get<SubjectRecord>(`
+    const threshold = context.settings.reputationThreshold ?? 0;
+    const excluded = new Set<string>();
+
+    while (!row) {
+      const subject = context.get<SubjectRecord>(
+        `
             SELECT u.*
             FROM subjects u
             JOIN chats c ON c.chatId = u.chatId
@@ -54,14 +211,22 @@ export function claimClassification(context: StorageContext): ClassificationJob 
                   )
                   AND r.userId = u.userId AND r.eligible = 1 AND r.seq > u.processedSeq
               )
-            ORDER BY u.rowid
+            ORDER BY u.lastCleanAt ASC, u.rowid ASC
             LIMIT 1
-        `);
-    if (!subject) {
-      return undefined;
-    }
-    const rows = context.all<RevisionRecord>(
-      `
+        `,
+      );
+      if (!subject) {
+        return undefined;
+      }
+      const subjectKey = `${subject.chatId}:${subject.userId}`;
+      if (excluded.has(subjectKey)) {
+        return undefined;
+      }
+      excluded.add(subjectKey);
+
+      const resolvedChatId = context.resolveChatId(subject.chatId);
+      const rows = context.all<RevisionRecord>(
+        `
   SELECT r.*
   FROM revisions r
   JOIN messages m USING(chatId,messageId,revision)
@@ -72,83 +237,177 @@ export function claimClassification(context: StorageContext): ClassificationJob 
   ORDER BY r.seq
   LIMIT 20
 `,
-      context.resolveChatId(subject.chatId),
-      subject.userId,
-      subject.processedSeq,
-    );
-    const mode = rows[0]!.mode;
-    const boundary = rows.findIndex((revision) => revision.mode !== mode);
-    if (boundary >= 0) {
-      rows.length = boundary;
-    }
-    let characters = 16_000;
-    let mediaLeft = 4;
-    const messages = rows.map((revision) => {
-      const text = revision.text.slice(0, Math.min(4_000, characters));
-      characters -= text.length;
-      const originalMedia = decode(revision.media, MediaSchema);
-      const media = originalMedia.slice(0, mediaLeft);
-      mediaLeft -= media.length;
-      const metadata = boundedMetadata(decode(revision.metadata, ObjectSchema));
-      return {
-        messageId: revision.messageId,
-        revision: revision.revision,
-        text,
-        media,
-        metadata: {
-          ...metadata,
-          originChatId: revision.chatId,
-          evidenceTruncated:
-            Boolean(metadata.evidenceTruncated) ||
-            text.length < revision.text.length ||
-            media.length < originalMedia.length,
-        },
+        resolvedChatId,
+        subject.userId,
+        subject.processedSeq,
+      );
+      const mode = rows[0]!.mode;
+      const boundary = rows.findIndex((revision) => revision.mode !== mode);
+      if (boundary >= 0) {
+        rows.length = boundary;
+      }
+
+      // Soft reputation gate: established regulars skip LLM only on plain, unedited, non-burst text.
+      if (threshold > 0 && subject.cleanCount >= threshold) {
+        const latestStamp =
+          context.get<{ stamp: number }>(
+            `
+            SELECT COALESCE(MAX(stamp), 0) AS stamp
+            FROM messages
+            WHERE chatId = ? AND userId = ?
+          `,
+            resolvedChatId,
+            subject.userId,
+          )?.stamp ?? context.now();
+        const recentBurstCount =
+          context.get<{ n: number }>(
+            `
+            SELECT COUNT(*) AS n
+            FROM messages
+            WHERE chatId = ? AND userId = ? AND stamp >= ?
+          `,
+            resolvedChatId,
+            subject.userId,
+            latestStamp - BURST_WINDOW_MS,
+          )?.n ?? rows.length;
+
+        const riskyRevision = rows.some((revision) => {
+          const media = decode(revision.media, MediaSchema);
+          const metadata = decode(revision.metadata, ObjectSchema);
+          return assessRevisionRisk(
+            { revision: revision.revision, text: revision.text, media, metadata },
+            recentBurstCount,
+          ).risky;
+        });
+
+        if (!riskyRevision) {
+          const highwater = rows[rows.length - 1]!.seq;
+          context.run(
+            `
+            UPDATE subjects
+            SET processedSeq = MAX(processedSeq, ?)
+            WHERE chatId = ? AND userId = ?
+          `,
+            highwater,
+            subject.chatId,
+            subject.userId,
+          );
+          context.audit("classification_skipped_reputation", {
+            chatId: subject.chatId,
+            userId: subject.userId,
+            cleanCount: subject.cleanCount,
+            messageIds: rows.map((r) => r.messageId),
+          });
+          continue;
+        }
+      }
+
+      let characters = 16_000;
+      let mediaLeft = 4;
+      const targetMessageIds = new Set<number>();
+      const replyParentIds = new Set<number>();
+      const messages = rows.map((revision) => {
+        targetMessageIds.add(revision.messageId);
+        const text = revision.text.slice(0, Math.min(4_000, characters));
+        characters -= text.length;
+        const originalMedia = decode(revision.media, MediaSchema);
+        const media = originalMedia.slice(0, mediaLeft);
+        mediaLeft -= media.length;
+        const rawMeta = decode(revision.metadata, ObjectSchema);
+        if (
+          typeof rawMeta.replyToMessageId === "number" &&
+          Number.isSafeInteger(rawMeta.replyToMessageId) &&
+          rawMeta.replyToMessageId > 0
+        ) {
+          replyParentIds.add(rawMeta.replyToMessageId);
+        }
+        const metadata = boundedMetadata(rawMeta);
+        return {
+          messageId: revision.messageId,
+          revision: revision.revision,
+          text,
+          media,
+          metadata: {
+            ...metadata,
+            originChatId: revision.chatId,
+            evidenceTruncated:
+              Boolean(metadata.evidenceTruncated) ||
+              text.length < revision.text.length ||
+              media.length < originalMedia.length,
+          },
+        };
+      });
+
+      const targetMinStamp =
+        context.get<{ stamp: number }>(
+          `
+          SELECT COALESCE(MIN(stamp), ?) AS stamp
+          FROM messages
+          WHERE chatId = ? AND messageId IN (SELECT value FROM json_each(?))
+        `,
+          context.now(),
+          resolvedChatId,
+          JSON.stringify([...targetMessageIds]),
+        )?.stamp ?? context.now();
+
+      const causal = buildCausalContext(
+        context,
+        subject.chatId,
+        subject.userId,
+        rows[0]!.seq,
+        targetMessageIds,
+        replyParentIds,
+        targetMinStamp,
+      );
+
+      const snapshot: Snapshot = {
+        id: randomUUID(),
+        chatId: subject.chatId,
+        userId: subject.userId,
+        generation: subject.generation,
+        version: subject.version,
+        messages,
+        ...(causal.context.length > 0 ? { context: causal.context } : {}),
+        ...(causal.truncated ? { contextTruncated: true } : {}),
       };
-    });
-    const snapshot: Snapshot = {
-      id: randomUUID(),
-      chatId: subject.chatId,
-      userId: subject.userId,
-      generation: subject.generation,
-      version: subject.version,
-      messages,
-    };
-    context.run(
-      `
+      context.run(
+        `
   INSERT INTO snapshots(id,chatId,userId,highwater,payload,createdAt)
   VALUES(?,?,?,?,?,?)
 `,
-      snapshot.id,
-      subject.chatId,
-      subject.userId,
-      rows[rows.length - 1]!.seq,
-      encode(snapshot),
-      context.now(),
-    );
-    const id = randomUUID();
-    context.run(
-      `
+        snapshot.id,
+        subject.chatId,
+        subject.userId,
+        rows[rows.length - 1]!.seq,
+        encode(snapshot),
+        context.now(),
+      );
+      const id = randomUUID();
+      context.run(
+        `
   INSERT INTO jobs(id,snapshotId,chatId,userId,state,mode,createdAt)
   VALUES(?,?,?,?,'pending',?,?)
 `,
-      id,
-      snapshot.id,
-      subject.chatId,
-      subject.userId,
-      mode,
-      context.now(),
-    );
-    row = context.get<ClassificationSnapshotRecord>(
-      `
+        id,
+        snapshot.id,
+        subject.chatId,
+        subject.userId,
+        mode,
+        context.now(),
+      );
+      row = context.get<ClassificationSnapshotRecord>(
+        `
   SELECT j.*,s.payload
   FROM jobs j
   JOIN snapshots s ON s.id=j.snapshotId
   WHERE j.id=?
 `,
-      id,
-    )!;
-    context.audit("classification_scheduled", { id, snapshotId: snapshot.id });
+        id,
+      )!;
+      context.audit("classification_scheduled", { id, snapshotId: snapshot.id });
+    }
   }
+
   const token = randomUUID();
   context.run(
     `
@@ -219,6 +478,12 @@ export function completeClassification(
       message: "Classifier returned invalid evidence or verdict",
     });
   }
+
+  // Record token spend whenever an external model call completed.
+  if (result.usage && Object.keys(result.usage).length > 0) {
+    recordUsage(context, subject.chatId, result.usage);
+  }
+
   const id = randomUUID();
   context.run(
     `
@@ -243,14 +508,26 @@ export function completeClassification(
 `,
     job.snapshot.id,
   )!.highwater;
+
+  const minChars = context.settings.reputationMinChars ?? 30;
+  const earnedReputation =
+    result.verdict === "clean" &&
+    job.snapshot.messages.some((message) => isSubstantiveMessage(message.text, minChars));
+
   context.run(
     `
   UPDATE subjects
-  SET processedSeq=MAX(processedSeq,?)
+  SET
+    processedSeq = MAX(processedSeq, ?),
+    cleanCount = cleanCount + ?,
+    lastCleanAt = CASE WHEN ? > 0 THEN ? ELSE lastCleanAt END
   WHERE chatId=?
   AND userId=?
 `,
     highwater,
+    earnedReputation ? 1 : 0,
+    earnedReputation ? 1 : 0,
+    context.now(),
     subject.chatId,
     subject.userId,
   );
@@ -286,7 +563,26 @@ export function completeClassification(
       retryAt: 0,
       originatingMode: mode,
     });
-    // Include messages that arrived during classification; one ban, all known cleanup.
+
+    // Scoped cleanup: delete cited evidence messages plus messages within the recent episode window.
+    // Never wipe multi-year history if an established member hits a false positive.
+    const cleanupWindowMs = context.settings.banCleanupWindowMs ?? 86_400_000;
+    const latestEvidenceStamp =
+      context.get<{ stamp: number }>(
+        `
+        SELECT COALESCE(MAX(stamp), 0) AS stamp
+        FROM messages
+        WHERE chatId IN (SELECT aliasId FROM chat_aliases WHERE canonicalId=?)
+          AND userId=?
+          AND messageId IN (SELECT value FROM json_each(?))
+      `,
+        subject.chatId,
+        subject.userId,
+        JSON.stringify([...validIds]),
+      )?.stamp ?? 0;
+    const episodeAnchor = latestEvidenceStamp > 0 ? latestEvidenceStamp : context.now();
+    const cleanupCutoff = episodeAnchor - cleanupWindowMs;
+
     for (const message of context.all<{
       chatId: number;
       messageId: number;
@@ -299,9 +595,15 @@ export function completeClassification(
   WHERE canonicalId=?)
   AND userId=?
   AND deleted=0
+  AND (
+    stamp >= ?
+    OR messageId IN (SELECT value FROM json_each(?))
+  )
 `,
       subject.chatId,
       subject.userId,
+      cleanupCutoff,
+      JSON.stringify(result.evidenceMessageIds),
     )) {
       addAction(context, {
         kind: "delete",
@@ -317,6 +619,16 @@ export function completeClassification(
       subject: subject,
       payload: { reason: result.reason.slice(0, 500) },
     });
+    if (context.settings.adminBanNotifications !== false) {
+      context.run(
+        `
+  INSERT OR IGNORE INTO admin_notifications(decisionId, state, createdAt)
+  VALUES(?, 'pending', ?)
+`,
+        id,
+        context.now(),
+      );
+    }
   }
   context.audit("decision", { id, snapshotId: job.snapshot.id, ...result });
   return true;

@@ -1,7 +1,14 @@
-import type { ActionAttempt, ActionDetail, StoreHealth, Decision } from "../domain";
+import type {
+  ActionAttempt,
+  ActionDetail,
+  Decision,
+  Mode,
+  RecentDecision,
+  StoreHealth,
+} from "../domain";
 import { StorageContext } from "./context";
 import type { DecisionRecord, ActionRecord } from "./records";
-import { decode, ActionPayloadSchema, ClassificationSchema } from "./codecs";
+import { decode, ActionPayloadSchema, ClassificationSchema, SnapshotSchema } from "./codecs";
 
 export function getOffset(context: StorageContext): number {
   const offset = context.get<{ value: string }>(`
@@ -47,6 +54,99 @@ export function decisionsFor(context: StorageContext, userId: number): Decision[
   return decisions.map((decision) => getDecision(context, decision.id)!);
 }
 
+export function recentDecisions(
+  context: StorageContext,
+  limit = 10,
+  chatId?: number,
+  verdicts: ReadonlyArray<string> = ["spam", "uncertain"],
+): RecentDecision[] {
+  const canonical = chatId === undefined ? undefined : context.canonicalChatId(chatId);
+  const rows = context.all<
+    DecisionRecord & {
+      username: string | null;
+      displayName: string | null;
+      snapshotPayload: string | null;
+      actionMode: Mode | null;
+    }
+  >(
+    `
+    SELECT
+      d.*,
+      o.createdAt AS overriddenAt,
+      u.username AS username,
+      u.displayName AS displayName,
+      s.payload AS snapshotPayload,
+      (SELECT a.mode FROM actions a WHERE a.decisionId = d.id AND a.kind = 'ban' LIMIT 1) AS actionMode
+    FROM decisions d
+    LEFT JOIN overrides o ON o.decisionId = d.id
+    LEFT JOIN subjects u ON u.chatId = d.chatId AND u.userId = d.userId
+    LEFT JOIN snapshots s ON s.id = d.snapshotId
+    WHERE d.status != 'legacy'
+      ${canonical === undefined ? "" : "AND d.chatId = ?"}
+      AND json_extract(d.payload, '$.verdict') IN (SELECT value FROM json_each(?))
+    ORDER BY d.createdAt DESC, d.rowid DESC
+    LIMIT ?
+  `,
+    ...(canonical === undefined
+      ? [JSON.stringify(verdicts), Math.max(1, Math.min(25, limit))]
+      : [canonical, JSON.stringify(verdicts), Math.max(1, Math.min(25, limit))]),
+  );
+
+  return rows.map((row) => {
+    const classification = decode(row.payload, ClassificationSchema);
+    let snippet = "";
+    if (row.snapshotPayload) {
+      try {
+        const snapshot = decode(row.snapshotPayload, SnapshotSchema);
+        snippet = snapshot.messages
+          .map((m) => m.text.trim())
+          .filter(Boolean)
+          .join(" / ")
+          .slice(0, 140);
+      } catch {
+        snippet = "";
+      }
+    }
+    return {
+      ...classification,
+      id: row.id,
+      chatId: context.resolveChatId(row.chatId),
+      userId: row.userId,
+      snapshotId: row.snapshotId,
+      createdAt: row.createdAt,
+      overriddenAt: row.overriddenAt ?? null,
+      status: row.overriddenAt !== null ? "overridden" : row.status,
+      username: row.username ?? null,
+      displayName: row.displayName ?? null,
+      mode: row.actionMode ?? context.settings.mode,
+      snippet,
+    };
+  });
+}
+
+export function resolveUsername(
+  context: StorageContext,
+  chatId: number,
+  rawUsername: string,
+): number[] {
+  const normalized = rawUsername.trim().replace(/^@/, "").toLowerCase();
+  if (!normalized || !/^[a-z0-9_]{3,64}$/.test(normalized)) return [];
+  const canonical = context.canonicalChatId(chatId);
+  return context
+    .all<{ userId: number }>(
+      `
+      SELECT userId
+      FROM subjects
+      WHERE chatId = ? AND username = ?
+      ORDER BY userId ASC
+      LIMIT 10
+    `,
+      canonical,
+      normalized,
+    )
+    .map((row) => row.userId);
+}
+
 export function decisionForMessage(
   context: StorageContext,
   chatId: number,
@@ -80,6 +180,69 @@ export function chatEnabled(context: StorageContext, chatId: number): boolean {
     context.canonicalChatId(chatId),
   );
   return chat?.enabled === 1;
+}
+
+export function chatSummaries(context: StorageContext): Array<{
+  readonly chatId: number;
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly approved: number;
+  readonly regulars: number;
+}> {
+  const threshold = context.settings.reputationThreshold ?? 5;
+  return context.settings.chatIds.map((chatId) => {
+    const canonical = context.canonicalChatId(chatId);
+    const resolved = context.resolveChatId(canonical);
+    const name =
+      context.settings.chatNames?.[String(resolved)] ??
+      context.settings.chatNames?.[String(chatId)] ??
+      `Чат ${resolved}`;
+    const enabled = chatEnabled(context, canonical);
+    const approved =
+      context.get<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM subjects WHERE chatId = ? AND approved IS NOT NULL`,
+        canonical,
+      )?.n ?? 0;
+    const regulars =
+      threshold > 0
+        ? (context.get<{ n: number }>(
+            `SELECT COUNT(*) AS n FROM subjects WHERE chatId = ? AND approved IS NULL AND cleanCount >= ?`,
+            canonical,
+            threshold,
+          )?.n ?? 0)
+        : 0;
+    return { chatId: resolved, name, enabled, approved, regulars };
+  });
+}
+
+export function blockedAuthJobs(context: StorageContext): number {
+  return (
+    context.get<{ n: number }>(
+      `
+      SELECT COUNT(*) AS n
+      FROM jobs
+      WHERE state = 'blocked'
+        AND (error LIKE '%401%' OR error LIKE '%403%' OR error LIKE '%API key%')
+    `,
+    )?.n ?? 0
+  );
+}
+
+export function needsAttentionActions(context: StorageContext): Array<{
+  readonly id: string;
+  readonly chatId: number;
+  readonly userId: number;
+  readonly error: string | null;
+}> {
+  return context.all<{ id: string; chatId: number; userId: number; error: string | null }>(
+    `
+    SELECT id, chatId, userId, error
+    FROM actions
+    WHERE state = 'needs_attention'
+    ORDER BY createdAt DESC
+    LIMIT 20
+  `,
+  );
 }
 
 export function status(context: StorageContext, chatId?: number): Record<string, number> {

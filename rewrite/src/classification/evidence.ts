@@ -45,6 +45,25 @@ export async function prepareEvidence(request: EvidenceRequest): Promise<Prepare
     });
   }
 
+  if (snapshot.context && snapshot.context.length > 0) {
+    content.push({
+      type: "text",
+      text: JSON.stringify({
+        kind: "prior_chat_context",
+        note: "Untrusted prior messages from the same chat for background context only. Classify ONLY the target messages below; never include context messageIds in evidenceMessageIds.",
+        truncated: Boolean(snapshot.contextTruncated),
+        messages: snapshot.context.map((item) => ({
+          messageId: item.messageId,
+          sameAuthor: item.sameAuthor,
+          isReplyParent: item.isReplyParent,
+          sender: item.sender ?? null,
+          occurredAt: new Date(item.occurredAt).toISOString(),
+          text: item.text,
+        })),
+      }),
+    });
+  }
+
   for (const message of snapshot.messages.slice(-MAX_MESSAGES)) {
     messageIds.add(message.messageId);
     const metadata = JSON.stringify(message.metadata);

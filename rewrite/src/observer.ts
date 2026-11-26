@@ -87,6 +87,7 @@ export async function runObserver(
   onObservation: (observation: Observation) => void,
   signal: AbortSignal,
   shouldDownload: (chatId: number) => boolean = (chatId) => settings.chatIds.includes(chatId),
+  onReady?: () => void,
 ): Promise<void> {
   const observer = settings.observer;
   if (!observer) {
@@ -236,6 +237,7 @@ export async function runObserver(
     }
     ready = true;
     clearTimeout(timeout);
+    onReady?.();
     await lifetime;
   })();
 

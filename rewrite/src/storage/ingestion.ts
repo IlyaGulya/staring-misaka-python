@@ -153,6 +153,21 @@ export function ingestObservation(context: StorageContext, observation: Observat
   }
   if (observation.userId !== undefined && (observation.actorKind ?? "user") === "user") {
     context.enroll(observation.chatId, observation.userId);
+    const normalizedUsername = observation.username?.trim().replace(/^@/, "").toLowerCase() || null;
+    const displayName = observation.displayName?.trim().slice(0, 160) || null;
+    if (normalizedUsername || displayName) {
+      context.run(
+        `
+  UPDATE subjects
+  SET username=COALESCE(?,username), displayName=COALESCE(?,displayName)
+  WHERE chatId=? AND userId=?
+`,
+        normalizedUsername,
+        displayName,
+        context.canonicalChatId(observation.chatId),
+        observation.userId,
+      );
+    }
   }
   if (observation.kind === "membership") {
     if (

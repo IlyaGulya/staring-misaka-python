@@ -10,6 +10,10 @@ export interface SubjectRecord {
   processedSeq: number;
   activeDecision: string | null;
   restrictionEpoch: number;
+  cleanCount: number;
+  lastCleanAt: number;
+  username: string | null;
+  displayName: string | null;
 }
 
 export interface RevisionRecord {
@@ -91,5 +95,15 @@ export interface AuditRecord {
   seq: number;
   kind: string;
   payload: string;
+  createdAt: number;
+}
+
+export interface AdminNotificationRecord {
+  decisionId: string;
+  state: "pending" | "retry" | "sent" | "failed";
+  attempt: number;
+  retryAt: number;
+  sentMessageId: number | null;
+  error: string | null;
   createdAt: number;
 }

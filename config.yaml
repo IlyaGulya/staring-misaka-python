@@ -30,18 +30,21 @@ system_prompt: |
 chats:
   # Mobile DI (Dagger 2 | Koin | Kodein | kotlin-inject | metro)
   -1001052301161:
+    name: Mobile DI
     extra_instructions: |
       This is a mobile development group focused on dependency injection frameworks (Dagger 2, Hilt, Koin, Kodein, kotlin-inject, metro).
       Technical discussions about DI patterns and frameworks are always on-topic. Beginner questions are welcome.
 
   # Android Architecture
   -1001075815423:
+    name: Android Architecture
     extra_instructions: |
       This is an Android development group focused on architecture patterns (MVI, MVVM, MVP, Clean Architecture, modularization).
       Discussions about Android architecture, design patterns, and best practices are on-topic. Code reviews and architecture questions are welcome.
 
   # nullptr.party[almaty]
   -1002081931239:
+    name: nullptr.party[almaty]
     extra_instructions: |
       This is a local tech community in Almaty, Kazakhstan for programmers and IT professionals.
       Members discuss programming, software architecture, career topics, local tech events, and general topics.
@@ -49,11 +52,13 @@ chats:
 
   # TestGroup
   -4573061644:
+    name: TestGroup
     system_prompt: |
       You are a spam classifier for a test group. Be lenient — only flag obvious spam like phishing links or scam messages.
 
   # Android Academy Msk
   -1001472889333:
+    name: Android Academy Msk
     extra_instructions: |
       This is an Android development education community in Moscow, Russia.
       Educational content, course announcements from Android Academy, and beginner questions are welcome.

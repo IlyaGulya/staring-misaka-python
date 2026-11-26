@@ -17,14 +17,24 @@ if (import.meta.main) {
     console.log(HELP);
   } else if (process.argv.includes("--check-config")) {
     const settings = loadSettings(process.env, false);
+    const provider = settings.provider ?? "anthropic";
+    const providerKeyPresent =
+      provider === "openai" ? Boolean(settings.openaiKey) : Boolean(settings.anthropicKey);
     console.log(
       JSON.stringify(
         {
           mode: settings.mode,
+          provider,
           model: settings.model,
+          ...(provider === "openai" ? { reasoningEffort: settings.reasoningEffort ?? "low" } : {}),
           chats: settings.chatIds,
+          chatNames: settings.chatNames ?? {},
           observer: Boolean(settings.observer),
-          credentialsConfigured: Boolean(settings.botToken && settings.anthropicKey),
+          dailyBudgetUsd: settings.dailyBudgetUsd ?? 0,
+          reputationThreshold: settings.reputationThreshold ?? 0,
+          retentionDays: settings.retentionDays ?? 0,
+          healthPort: settings.healthPort ?? 0,
+          credentialsConfigured: Boolean(settings.botToken && providerKeyPresent),
         },
         null,
         2,

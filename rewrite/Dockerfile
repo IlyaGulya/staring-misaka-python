@@ -12,7 +12,10 @@ ENV NODE_ENV=production \
     MODE=shadow \
     DB_PATH=/app/data/misaka.sqlite \
     JOURNAL_PATH=/app/data/events.jsonl \
-    SPAM_CONFIG_PATH=/app/config.yaml
+    SPAM_CONFIG_PATH=/app/config.yaml \
+    HEALTH_HOST=0.0.0.0 \
+    HEALTH_PORT=8080
+EXPOSE 8080
 VOLUME ["/app/data"]
 USER bun
 STOPSIGNAL SIGTERM

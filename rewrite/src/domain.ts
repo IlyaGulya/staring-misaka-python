@@ -7,8 +7,11 @@ export class AppError extends Data.TaggedError("AppError")<{
 }> {}
 
 export type Mode = "shadow" | "live";
+export type LlmProvider = "openai" | "anthropic";
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high";
 export type Verdict = "spam" | "clean" | "uncertain";
 export type ActorKind = "user" | "channel" | "unknown";
+
 export interface MediaRef {
   readonly kind: "photo" | "document" | "video" | "unsupported";
   readonly fileId?: string;
@@ -16,6 +19,7 @@ export interface MediaRef {
   readonly mimeType?: string;
   readonly size?: number;
 }
+
 export interface Observation {
   readonly source: "bot" | "observer" | "replay";
   readonly sourceKey: string;
@@ -37,6 +41,17 @@ export interface Observation {
   readonly migratedTo?: number;
   readonly raw?: unknown;
 }
+
+export interface ContextMessage {
+  readonly messageId: number;
+  readonly userId?: number;
+  readonly sameAuthor: boolean;
+  readonly isReplyParent: boolean;
+  readonly sender?: string;
+  readonly occurredAt: number;
+  readonly text: string;
+}
+
 export interface Snapshot {
   readonly id: string;
   readonly chatId: number;
@@ -50,7 +65,10 @@ export interface Snapshot {
     readonly media: ReadonlyArray<MediaRef>;
     readonly metadata: Record<string, unknown>;
   }>;
+  readonly context?: ReadonlyArray<ContextMessage>;
+  readonly contextTruncated?: boolean;
 }
+
 export interface Classification {
   readonly verdict: Verdict;
   readonly reason: string;
@@ -59,6 +77,7 @@ export interface Classification {
   readonly promptVersion: string;
   readonly usage?: Record<string, number>;
 }
+
 export interface Decision extends Classification {
   readonly id: string;
   readonly chatId: number;
@@ -67,6 +86,55 @@ export interface Decision extends Classification {
   readonly createdAt: number;
   readonly overriddenAt: number | null;
   readonly status: string;
+}
+
+export interface RecentDecision extends Decision {
+  readonly username: string | null;
+  readonly displayName: string | null;
+  readonly mode: Mode | "legacy";
+  readonly snippet: string;
+}
+
+export interface UsageSummary {
+  readonly day: string;
+  readonly requests: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedTokens: number;
+  readonly estimatedUsd: number;
+}
+
+export interface IncidentAlert {
+  readonly key: string;
+  readonly state: "open" | "resolved";
+  readonly openedAt: number;
+  readonly lastNotifiedAt: number;
+  readonly details: string;
+}
+
+export interface AdminBanNotice {
+  readonly decisionId: string;
+  readonly chatId: number;
+  readonly userId: number;
+  readonly username: string | null;
+  readonly displayName: string | null;
+  readonly reason: string;
+  readonly model: string;
+  readonly mode: Mode;
+  readonly snippet: string;
+  readonly createdAt: number;
+}
+
+export interface RuntimeStatus {
+  readonly startedAt: number;
+  readonly botId: number;
+  readonly botUsername: string;
+  readonly ready: boolean;
+  readonly lastPollAt: number;
+  readonly observerConfigured: boolean;
+  readonly observerConnected: boolean;
+  readonly observerLastEventAt: number;
+  readonly observerDisconnectedSince: number | null;
 }
 
 export interface Command {
@@ -91,6 +159,7 @@ export interface ActionJob extends Action {
   readonly phase: "preflight" | "reconcile";
   readonly undoRequested: boolean;
 }
+
 export interface Action {
   readonly id: string;
   readonly kind: "ban" | "unban" | "delete" | "notify" | "edit";
@@ -160,10 +229,12 @@ export interface StoreHealth {
   readonly journalCursor: number;
   readonly [counter: string]: number | Mode;
 }
+
 export interface Membership {
   readonly restricted: boolean;
   readonly isMember: boolean;
 }
+
 export interface TelegramPort {
   readonly botId: number;
   readonly botUsername: string;
@@ -175,20 +246,28 @@ export interface TelegramPort {
   edit(chatId: number, messageId: number, text: string, signal: AbortSignal): Promise<void>;
   isAdmin(chatId: number, userId: number, signal: AbortSignal): Promise<boolean>;
 }
+
 export interface ClassifierPort {
   classify(snapshot: Snapshot): Effect.Effect<Classification, AppError>;
 }
+
 export interface Settings {
   readonly mode: Mode;
   readonly dbPath: string;
   readonly botToken: string;
   readonly adminId: number;
   readonly chatIds: ReadonlyArray<number>;
+  readonly provider?: LlmProvider;
+  readonly openaiKey?: string;
+  readonly openaiUrl?: string;
+  readonly reasoningEffort?: ReasoningEffort;
+  readonly maxOutputTokens?: number;
   readonly anthropicKey: string;
   readonly anthropicUrl: string;
   readonly model: string;
   readonly systemPrompt: string;
   readonly chatPrompts: Readonly<Record<string, string>>;
+  readonly chatNames?: Readonly<Record<string, string>>;
   readonly telegramApiRoot: string;
   readonly pollTimeout: number;
   readonly concurrency: number;
@@ -199,12 +278,25 @@ export interface Settings {
   readonly retryBaseMs: number;
   readonly recoveryIntervalMs: number;
   readonly journalPath: string;
+  readonly dailyBudgetUsd?: number;
+  readonly inputUsdPerMillion?: number;
+  readonly outputUsdPerMillion?: number;
+  readonly cachedInputUsdPerMillion?: number;
+  readonly reputationThreshold?: number;
+  readonly reputationMinChars?: number;
+  readonly banCleanupWindowMs?: number;
+  readonly retentionDays?: number;
+  readonly healthPort?: number;
+  readonly healthHost?: string;
+  readonly adminBanNotifications?: boolean;
+  readonly adminAlerts?: boolean;
   readonly observer?: {
     readonly apiId: number;
     readonly apiHash: string;
     readonly session: string;
   };
 }
+
 export function failure(error: unknown): AppError {
   if (error instanceof AppError) return error;
   return new AppError({

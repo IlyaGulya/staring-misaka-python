@@ -13,6 +13,16 @@ export const MediaSchema = Schema.Array(
   }),
 );
 
+export const ContextMessageSchema = Schema.Struct({
+  messageId: Schema.Number,
+  userId: Schema.optional(Schema.Number),
+  sameAuthor: Schema.Boolean,
+  isReplyParent: Schema.Boolean,
+  sender: Schema.optional(Schema.String),
+  occurredAt: Schema.Number,
+  text: Schema.String,
+});
+
 export const SnapshotSchema = Schema.Struct({
   id: Schema.String,
   chatId: Schema.Number,
@@ -28,6 +38,8 @@ export const SnapshotSchema = Schema.Struct({
       metadata: ObjectSchema,
     }),
   ),
+  context: Schema.optional(Schema.Array(ContextMessageSchema)),
+  contextTruncated: Schema.optional(Schema.Boolean),
 });
 
 export const ClassificationSchema = Schema.Struct({

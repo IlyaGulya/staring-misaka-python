@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-/** Version 1 is unchanged: reopening an existing rewrite database requires no migration. */
+/** Version 2 extends v1 in-place with soft reputation, budget tracking, incident alerts and admin notices. */
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {
     mkdirSync(dirname(path), { recursive: true });
@@ -39,6 +39,10 @@ export function openDatabase(path: string): Database {
     processedSeq INTEGER NOT NULL DEFAULT 0,
     activeDecision TEXT,
     restrictionEpoch INTEGER NOT NULL DEFAULT 0,
+    cleanCount INTEGER NOT NULL DEFAULT 0,
+    lastCleanAt INTEGER NOT NULL DEFAULT 0,
+    username TEXT,
+    displayName TEXT,
     PRIMARY KEY(chatId,userId)
   );
   CREATE TABLE IF NOT EXISTS observations (
@@ -73,6 +77,7 @@ export function openDatabase(path: string): Database {
     UNIQUE(chatId,messageId,revision)
   );
   CREATE INDEX IF NOT EXISTS revisions_subject ON revisions(chatId,userId,seq);
+  CREATE INDEX IF NOT EXISTS revisions_chat_seq ON revisions(chatId,seq);
   CREATE TABLE IF NOT EXISTS snapshots (
     id TEXT PRIMARY KEY,
     chatId INTEGER NOT NULL,
@@ -106,6 +111,7 @@ export function openDatabase(path: string): Database {
     status TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS decisions_subject ON decisions(userId,createdAt);
+  CREATE INDEX IF NOT EXISTS decisions_recent ON decisions(createdAt DESC);
   CREATE TABLE IF NOT EXISTS overrides (
     decisionId TEXT PRIMARY KEY REFERENCES decisions(id),
     actorId INTEGER NOT NULL,
@@ -172,8 +178,55 @@ export function openDatabase(path: string): Database {
     payload TEXT NOT NULL,
     PRIMARY KEY(tableName,legacyId)
   );
-  PRAGMA user_version=1;
-  
+  CREATE TABLE IF NOT EXISTS llm_usage (
+    day TEXT NOT NULL,
+    chatId INTEGER NOT NULL,
+    requests INTEGER NOT NULL DEFAULT 0,
+    inputTokens INTEGER NOT NULL DEFAULT 0,
+    outputTokens INTEGER NOT NULL DEFAULT 0,
+    cachedTokens INTEGER NOT NULL DEFAULT 0,
+    estimatedUsd REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY(day,chatId)
+  );
+  CREATE TABLE IF NOT EXISTS incident_alerts (
+    key TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    openedAt INTEGER NOT NULL,
+    lastNotifiedAt INTEGER NOT NULL,
+    details TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS admin_notifications (
+    decisionId TEXT PRIMARY KEY REFERENCES decisions(id),
+    state TEXT NOT NULL DEFAULT 'pending',
+    attempt INTEGER NOT NULL DEFAULT 0,
+    retryAt INTEGER NOT NULL DEFAULT 0,
+    sentMessageId INTEGER,
+    error TEXT,
+    createdAt INTEGER NOT NULL
+  );
 `);
+
+  // Idempotent v1 -> v2 column upgrades for existing databases.
+  const columns = new Set(
+    database
+      .query<{ name: string }, []>("PRAGMA table_info(subjects)")
+      .all()
+      .map((column) => column.name),
+  );
+  if (!columns.has("cleanCount")) {
+    database.exec("ALTER TABLE subjects ADD COLUMN cleanCount INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.has("lastCleanAt")) {
+    database.exec("ALTER TABLE subjects ADD COLUMN lastCleanAt INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.has("username")) {
+    database.exec("ALTER TABLE subjects ADD COLUMN username TEXT");
+  }
+  if (!columns.has("displayName")) {
+    database.exec("ALTER TABLE subjects ADD COLUMN displayName TEXT");
+  }
+  database.exec("CREATE INDEX IF NOT EXISTS subjects_username ON subjects(chatId,username)");
+  database.exec("PRAGMA user_version=2");
+
   return database;
 }

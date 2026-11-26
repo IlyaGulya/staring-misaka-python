@@ -240,7 +240,12 @@ describe("command authorization and privacy", () => {
     expect(f.sent[0]!.text).toContain("Private evidence");
     expect(f.sent[0]!.text).not.toContain(settings.botToken);
     expect(f.sent[0]!.options?.reply_markup).toEqual({
-      inline_keyboard: [[expect.objectContaining({ callback_data: `undo:${decisionId}` })]],
+      inline_keyboard: [
+        [
+          expect.objectContaining({ callback_data: `undo:${decisionId}` }),
+          expect.objectContaining({ callback_data: `approve:-100:${decision.userId}` }),
+        ],
+      ],
     });
   });
 

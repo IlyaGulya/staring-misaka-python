@@ -2,14 +2,18 @@ import {
   AppError,
   type ActionDetail,
   type ActionJob,
+  type AdminBanNotice,
   type Classification,
   type ClassificationJob,
   type Command,
   type Decision,
+  type IncidentAlert,
   type Membership,
   type Observation,
+  type RecentDecision,
   type Settings,
   type StoreHealth,
+  type UsageSummary,
 } from "./domain";
 import { StorageContext } from "./storage/context";
 import { recoverInterruptedWork } from "./storage/recovery";
@@ -18,6 +22,9 @@ import * as classification from "./storage/classification";
 import * as actions from "./storage/actions";
 import * as administration from "./storage/administration";
 import * as queries from "./storage/queries";
+import * as budget from "./storage/budget";
+import * as incidents from "./storage/incidents";
+import { runRetention, type RetentionReport } from "./storage/retention";
 import { exportJournal } from "./storage/journal";
 import { importLegacy } from "./storage/legacy";
 
@@ -37,6 +44,14 @@ export class Store {
 
   close(): void {
     this.context.db.close();
+  }
+
+  ping(): boolean {
+    try {
+      return this.context.get<{ ok: number }>("SELECT 1 AS ok")?.ok === 1;
+    } catch {
+      return false;
+    }
   }
 
   bindBot(botId: number, botUsername?: string): void {
@@ -146,6 +161,14 @@ export class Store {
     return queries.decisionsFor(this.context, userId);
   }
 
+  recentDecisions(limit = 10, chatId?: number): RecentDecision[] {
+    return queries.recentDecisions(this.context, limit, chatId);
+  }
+
+  resolveUsername(chatId: number, username: string): number[] {
+    return queries.resolveUsername(this.context, chatId, username);
+  }
+
   decisionForMessage(chatId: number, messageId: number): Decision | undefined {
     return queries.decisionForMessage(this.context, chatId, messageId);
   }
@@ -160,6 +183,10 @@ export class Store {
 
   chatEnabled(chatId: number): boolean {
     return queries.chatEnabled(this.context, chatId);
+  }
+
+  chatSummaries() {
+    return queries.chatSummaries(this.context);
   }
 
   toggleChat(chatId: number, enabled?: boolean): boolean {
@@ -212,6 +239,52 @@ export class Store {
 
   interruptAction(action: ActionJob): void {
     this.failAction(action, new AppError({ category: "unknown", message: "action interrupted" }));
+  }
+
+  todayUsage(chatId?: number): UsageSummary {
+    return budget.getTodayUsage(this.context, chatId);
+  }
+
+  isBudgetExceeded(): boolean {
+    return budget.isDailyBudgetExceeded(this.context);
+  }
+
+  recordIncident(key: string, active: boolean, details: string) {
+    return this.context.atomic(() =>
+      incidents.recordIncidentState(this.context, key, active, details),
+    );
+  }
+
+  openIncidents(): IncidentAlert[] {
+    return incidents.listOpenIncidents(this.context);
+  }
+
+  blockedAuthJobs(): number {
+    return queries.blockedAuthJobs(this.context);
+  }
+
+  needsAttentionActions() {
+    return queries.needsAttentionActions(this.context);
+  }
+
+  claimAdminBanNotice(): AdminBanNotice | undefined {
+    return this.context.atomic(() => incidents.claimAdminBanNotice(this.context));
+  }
+
+  completeAdminBanNotice(decisionId: string, sentMessageId?: number): void {
+    this.context.atomic(() =>
+      incidents.completeAdminBanNotice(this.context, decisionId, sentMessageId),
+    );
+  }
+
+  failAdminBanNotice(decisionId: string, error: string, permanent: boolean): void {
+    this.context.atomic(() =>
+      incidents.failAdminBanNotice(this.context, decisionId, error, permanent),
+    );
+  }
+
+  runRetention(): RetentionReport {
+    return this.context.atomic(() => runRetention(this.context));
   }
 
   status(chatId?: number): Record<string, number> {

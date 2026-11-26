@@ -16,6 +16,7 @@ import {
   type TelegramPort,
 } from "../src/domain";
 import { Engine } from "../src/engine";
+import { cancelledNotificationText, notificationText } from "../src/notifications";
 import { Store } from "../src/store";
 
 const stores = new Set<Store>();
@@ -604,8 +605,8 @@ describe("durable moderation state machine", () => {
     const engine = new Engine(store, new EvidenceClassifier(), telegram, settings);
     await drain(engine);
     expect(telegram.deleted).not.toContainEqual([-100, 9_001]);
-    expect(telegram.edits).toEqual([[-100, 9_001, "Решение отменено"]]);
-    expect(telegram.notices[0]![1]).toBe("Решение отменено");
+    expect(telegram.edits).toEqual([[-100, 9_001, cancelledNotificationText]]);
+    expect(telegram.notices[0]![1]).toBe(cancelledNotificationText);
     expect(store.decisionsFor(42)[0]!.verdict).toBe("spam");
     clock.now = 1_100;
     await drain(engine);
@@ -642,7 +643,7 @@ describe("durable moderation state machine", () => {
       notify,
       new AppError({ category: "unknown", message: "response lost after send" }),
     );
-    const text = `Moderation decision recorded. Details and appeal: https://t.me/${telegram.botUsername}?start=explain_${notify.decisionId}`;
+    const text = notificationText(telegram.botUsername, notify.decisionId);
     store.ingest(
       message(91, { sourceKey: "copied-link", userId: 99, text, occurredAt: clock.now }),
     );
@@ -659,7 +660,7 @@ describe("durable moderation state machine", () => {
     );
     expect(store.action(notify.id)).toMatchObject({ state: "confirmed", payload: { receipt: 92 } });
     await drain(engine);
-    expect(telegram.edits).toContainEqual([-100, 92, "Решение отменено"]);
+    expect(telegram.edits).toContainEqual([-100, 92, cancelledNotificationText]);
     expect(telegram.notices).toHaveLength(0);
     clock.now += settings.followupTtlMs;
     await drain(engine);

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { Schema } from "effect";
-import type { Generated } from "@effect/ai-anthropic";
 import type { Update } from "grammy/types";
 
 // Executed inside the production image by smoke-image.sh, with --network none.
@@ -19,10 +18,11 @@ const chatId = -1000000000123;
 const userId = 42;
 const botId = 777;
 const text = "private-container-smoke-message";
-const key = "synthetic-container-api-key";
+const key = "sk-synthetic-container-openai-key";
 const token = "777:synthetic-container-token";
 const path = "/app/data/smoke.sqlite";
 const journal = "/app/data/events.jsonl";
+const healthPort = 18080;
 const updates: Update[] = [];
 const methods = new Set<string>();
 const violations: string[] = [];
@@ -30,9 +30,17 @@ let modelRequests = 0;
 let polls = 0;
 
 const Poll = Schema.Struct({ offset: Schema.optional(Schema.Int) });
-const NativeRequest = Schema.Struct({
-  output_config: Schema.Struct({ format: Schema.Struct({ type: Schema.Literal("json_schema") }) }),
-  tools: Schema.optional(Schema.Array(Schema.Unknown)),
+const ResponsesRequest = Schema.Struct({
+  model: Schema.String,
+  store: Schema.Literal(false),
+  tools: Schema.Array(Schema.Unknown),
+  reasoning: Schema.Struct({ mode: Schema.Literal("standard"), effort: Schema.Literal("low") }),
+  text: Schema.Struct({
+    format: Schema.Struct({
+      type: Schema.Literal("json_schema"),
+      strict: Schema.Literal(true),
+    }),
+  }),
 });
 const Log = Schema.Struct({ event: Schema.String });
 const Audit = Schema.Struct({ seq: Schema.Int, kind: Schema.String });
@@ -43,38 +51,38 @@ const server = Bun.serve({
   async fetch(request) {
     try {
       const url = new URL(request.url);
-      if (url.pathname === "/v1/messages") {
-        const body = Schema.decodeUnknownSync(NativeRequest)(await request.json());
-        assert.equal(body.tools?.length ?? 0, 0, "Classifier must not expose tools");
-        assert.equal(request.headers.get("x-api-key"), key);
+      if (url.pathname === "/v1/responses") {
+        const body = Schema.decodeUnknownSync(ResponsesRequest)(await request.json());
+        assert.equal(body.tools.length, 0, "Classifier must not expose tools");
+        assert.equal(request.headers.get("authorization"), `Bearer ${key}`);
         modelRequests++;
         assert(modelRequests <= 2, "Restart must not repeat completed classifications");
         return Response.json({
-          id: `msg_${modelRequests}`,
-          type: "message",
-          role: "assistant",
-          model: "claude-sonnet-4-5-20250929",
-          stop_reason: "end_turn",
-          stop_sequence: null,
-          content: [
+          id: `resp_${modelRequests}`,
+          status: "completed",
+          model: "gpt-6-luna",
+          output: [
             {
-              type: "text",
-              text: JSON.stringify({
-                verdict: modelRequests === 1 ? "clean" : "spam",
-                reason: "Synthetic container smoke finding",
-                evidenceMessageIds: [10],
-              }),
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    verdict: modelRequests === 1 ? "clean" : "spam",
+                    reason: "Synthetic container smoke finding",
+                    evidenceMessageIds: [10],
+                  }),
+                },
+              ],
             },
           ],
           usage: {
-            input_tokens: 12,
-            output_tokens: 8,
-            cache_creation_input_tokens: 0,
-            cache_creation: null,
-            service_tier: "standard",
-            cache_read_input_tokens: 0,
+            input_tokens: 120,
+            output_tokens: 24,
+            input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+            output_tokens_details: { reasoning_tokens: 8 },
           },
-        } satisfies Generated.BetaMessage);
+        });
       }
       const method = url.pathname.replace(`/bot${token}/`, "");
       methods.add(method);
@@ -89,6 +97,7 @@ const server = Bun.serve({
             user: { id: botId, is_bot: true, first_name: "Smoke" },
             status: "administrator",
             can_restrict_members: true,
+            can_delete_messages: true,
           });
         case "getUpdates": {
           const body = Schema.decodeUnknownSync(Poll)(await request.json());
@@ -111,21 +120,28 @@ const server = Bun.serve({
 
 await Bun.write(
   "/tmp/policy.yaml",
-  'system_prompt: "Classify synthetic smoke evidence"\nmodel: claude-sonnet-4-5-20250929\n',
+  'system_prompt: "Classify synthetic smoke evidence"\nchats:\n  -1000000000123:\n    name: SmokeChat\n',
 );
 const env = {
   ...process.env,
   MODE: "shadow",
   ALLOW_LIVE_MODERATION: "false",
+  LLM_PROVIDER: "openai",
+  OPENAI_API_KEY: key,
+  OPENAI_BASE_URL: `${server.url.origin}/v1`,
+  OPENAI_REASONING_EFFORT: "low",
+  LLM_MODEL: "gpt-6-luna",
   BOT_TOKEN: token,
-  ANTHROPIC_API_KEY: key,
   ADMIN_ID: "1",
   TRACKING_CHAT_IDS: String(chatId),
   SPAM_CONFIG_PATH: "/tmp/policy.yaml",
   DB_PATH: path,
   JOURNAL_PATH: journal,
-  ANTHROPIC_BASE_URL: server.url.origin,
   TELEGRAM_API_ROOT: server.url.origin,
+  HEALTH_HOST: "127.0.0.1",
+  HEALTH_PORT: String(healthPort),
+  ADMIN_BAN_NOTIFICATIONS: "false",
+  ADMIN_ALERTS: "false",
   OBSERVER_API_ID: "",
   OBSERVER_API_HASH: "",
   OBSERVER_SESSION: "",
@@ -210,6 +226,13 @@ try {
 
   running = launch();
   await until(() => existsSync(path) && polls > 0, "receiver startup");
+
+  phase = "health probes";
+  const healthz = await fetch(`http://127.0.0.1:${healthPort}/healthz`);
+  assert.equal(healthz.status, 200);
+  const readyz = await fetch(`http://127.0.0.1:${healthPort}/readyz`);
+  assert.equal(readyz.status, 200);
+
   database = new Database(path, { readonly: true, strict: true });
   const message = {
     message_id: 10,
@@ -281,6 +304,8 @@ try {
       result: "PASS",
       platform: `${process.platform}/${process.arch}`,
       uid: process.getuid?.(),
+      provider: "openai",
+      healthProbes: "PASS",
       verdicts: verdicts(),
       nativeRequests: modelRequests,
       restart: "PASS",

@@ -195,14 +195,16 @@ export function normalizeUpdate(update: Update): Observation[] {
 export function commandFromUpdate(update: Update): Command | undefined {
   if (update.callback_query) {
     const callback = update.callback_query;
-    if (!callback.data?.startsWith("undo:") || !callback.message || callback.message.date === 0) {
+    const supportedCallback =
+      callback.data?.startsWith("undo:") || callback.data?.startsWith("approve:");
+    if (!supportedCallback || !callback.message || callback.message.date === 0) {
       return undefined;
     }
     return {
       id: `bot:${update.update_id}`,
       chatId: callback.message.chat.id,
       userId: callback.from.id,
-      text: callback.data,
+      text: callback.data!,
       messageId: callback.message.message_id,
       callbackId: callback.id,
     };

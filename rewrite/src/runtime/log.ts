@@ -8,6 +8,7 @@ export class RuntimeLog {
     this.secrets = [
       settings.botToken,
       settings.anthropicKey,
+      settings.openaiKey,
       settings.observer?.session,
       settings.observer?.apiHash,
     ].filter((secret): secret is string => Boolean(secret));
@@ -22,7 +23,10 @@ export class RuntimeLog {
     for (const secret of this.secrets) {
       message = message.replaceAll(secret, "[redacted]");
     }
-    message = message.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]").slice(0, 1000);
+    message = message
+      .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]")
+      .replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-[redacted]")
+      .slice(0, 1000);
     this.event(event, { ...details, error: message });
     return message;
   }
