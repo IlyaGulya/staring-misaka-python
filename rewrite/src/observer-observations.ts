@@ -101,42 +101,60 @@ function messageContext(value: unknown): MessageContext | undefined {
 function serviceObservations({ message, base, userId }: MessageContext): Observation[] {
   const action = object(message.action)
   switch (action.className) {
-    case 'MessageActionChatAddUser':
+    case 'MessageActionChatAddUser': {
       if (!Array.isArray(action.users)) return []
-      return action.users.map((id, index) => ({
-        ...base,
-        sourceKey: `${base.sourceKey}:join:${index}`,
-        kind: 'membership',
-        userId: integer(id),
-        actorKind: 'user',
-        membership: 'joined',
-        changedBy: userId,
-      }))
-    case 'MessageActionChatJoinedByLink':
-    case 'MessageActionChatJoinedByRequest':
-      return [
-        {
+      const observations: Observation[] = []
+      for (const [index, id] of action.users.entries()) {
+        const addedUserId = integer(id)
+        observations.push({
           ...base,
+          sourceKey: `${base.sourceKey}:join:${index}`,
           kind: 'membership',
-          userId,
+          ...(addedUserId === undefined ? {} : { userId: addedUserId }),
           actorKind: 'user',
           membership: 'joined',
-          changedBy: integer(action.inviterId),
-        },
-      ]
-    case 'MessageActionChatDeleteUser':
+          ...(userId === undefined ? {} : { changedBy: userId }),
+        })
+      }
+      return observations
+    }
+    case 'MessageActionChatJoinedByLink':
+    case 'MessageActionChatJoinedByRequest': {
+      const inviterId = integer(action.inviterId)
       return [
         {
           ...base,
           kind: 'membership',
-          userId: integer(action.userId),
+          ...(userId === undefined ? {} : { userId }),
           actorKind: 'user',
-          membership: 'left',
-          changedBy: userId,
+          membership: 'joined',
+          ...(inviterId === undefined ? {} : { changedBy: inviterId }),
         },
       ]
-    case 'MessageActionChatMigrateTo':
-      return [{ ...base, kind: 'migration', migratedTo: peerId({ channelId: action.channelId }) }]
+    }
+    case 'MessageActionChatDeleteUser': {
+      const removedUserId = integer(action.userId)
+      return [
+        {
+          ...base,
+          kind: 'membership',
+          ...(removedUserId === undefined ? {} : { userId: removedUserId }),
+          actorKind: 'user',
+          membership: 'left',
+          ...(userId === undefined ? {} : { changedBy: userId }),
+        },
+      ]
+    }
+    case 'MessageActionChatMigrateTo': {
+      const migratedTo = peerId({ channelId: action.channelId })
+      return [
+        {
+          ...base,
+          kind: 'migration',
+          ...(migratedTo === undefined ? {} : { migratedTo }),
+        },
+      ]
+    }
     case 'MessageActionChannelMigrateFrom':
       return [
         {
@@ -158,11 +176,13 @@ function messageMedia(value: unknown): MediaRef[] {
       return [{ kind: 'photo', mimeType: 'image/jpeg' }]
     case 'MessageMediaDocument': {
       const document = object(attachment.document)
+      const mimeType = typeof document.mimeType === 'string' ? document.mimeType : undefined
+      const size = integer(document.size)
       return [
         {
           kind: 'document',
-          mimeType: typeof document.mimeType === 'string' ? document.mimeType : undefined,
-          size: integer(document.size),
+          ...(mimeType === undefined ? {} : { mimeType }),
+          ...(size === undefined ? {} : { size }),
         },
       ]
     }
@@ -176,40 +196,53 @@ function messageMedia(value: unknown): MediaRef[] {
 
 function messageEntities(value: unknown): RuntimeObject[] {
   if (!Array.isArray(value)) return []
-  return value.map((item: unknown) => {
+  const entities: RuntimeObject[] = []
+  for (const item of value) {
     const entity = object(item)
     const className = typeof entity.className === 'string' ? entity.className : ''
     const type = className
       .replace(/^MessageEntity/, '')
       .replace(/[A-Z]/g, (letter, index: number) => `${index ? '_' : ''}${letter.toLowerCase()}`)
-    return {
+    const record: RuntimeObject = {
       ...object(jsonData(item)),
       type,
       offset: entity.offset,
       length: entity.length,
-      ...(entity.userId === undefined ? {} : { userId: integer(entity.userId) }),
     }
-  })
+    if (entity.userId !== undefined) {
+      record.userId = integer(entity.userId)
+    }
+    entities.push(record)
+  }
+  return entities
 }
 
 function messageButtons(value: unknown): RuntimeObject[][] {
   const rows = object(value).rows
   if (!Array.isArray(rows)) return []
-  return rows.map((row) => {
+  const result: RuntimeObject[][] = []
+  for (const row of rows) {
     const buttons = object(row).buttons
-    if (!Array.isArray(buttons)) return []
-    return buttons.map((button) => {
+    if (!Array.isArray(buttons)) {
+      result.push([])
+      continue
+    }
+    const rowButtons: RuntimeObject[] = []
+    for (const button of buttons) {
       const item = object(button)
-      return {
+      const record: RuntimeObject = {
         ...object(jsonData(button)),
         text: item.text,
         url: item.url,
-        ...(item.data instanceof Uint8Array
-          ? { callback_data: Buffer.from(item.data).toString('utf8') }
-          : {}),
       }
-    })
-  })
+      if (item.data instanceof Uint8Array) {
+        record.callback_data = Buffer.from(item.data).toString('utf8')
+      }
+      rowButtons.push(record)
+    }
+    result.push(rowButtons)
+  }
+  return result
 }
 
 function messageMetadata(
@@ -267,16 +300,17 @@ export function normalizeObserverMessage(value: unknown, edited = false): Observ
   else if (object(message.fromId).channelId !== undefined || message.post === true)
     actorKind = 'channel'
 
+  const username = typeof sender.username === 'string' ? sender.username : undefined
   return [
     {
       ...base,
       kind: edited ? 'edit' : 'message',
-      userId,
+      ...(userId === undefined ? {} : { userId }),
       actorKind,
-      username: typeof sender.username === 'string' ? sender.username : undefined,
+      ...(username === undefined ? {} : { username }),
       displayName: [sender.firstName, sender.lastName].filter(Boolean).join(' '),
       text,
-      editedAt: editDate === undefined ? undefined : editDate * 1000,
+      ...(editDate === undefined ? {} : { editedAt: editDate * 1000 }),
       media: messageMedia(message.media),
       metadata: messageMetadata(message, text),
     },
@@ -346,16 +380,18 @@ function participantObservations(update: RuntimeObject, now: number): Observatio
   if (banned) membership = 'banned'
   else if (left) membership = previouslyBanned ? 'unbanned' : 'left'
 
+  const participantUserId = integer(update.userId)
+  const changedBy = integer(update.actorId ?? update.inviterId)
   return [
     {
       source: 'observer',
       sourceKey: `observer:membership:${chatId}:${String(update.userId)}:${String(update.qts ?? update.version ?? update.date)}`,
       kind: 'membership',
       chatId,
-      userId: integer(update.userId),
+      ...(participantUserId === undefined ? {} : { userId: participantUserId }),
       actorKind: 'user',
       occurredAt: (integer(update.date) ?? Math.floor(now / 1000)) * 1000,
-      changedBy: integer(update.actorId ?? update.inviterId),
+      ...(changedBy === undefined ? {} : { changedBy }),
       membership,
       raw: jsonData(update),
     },

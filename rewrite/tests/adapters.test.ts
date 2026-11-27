@@ -90,6 +90,14 @@ function botMessage<const Fields extends Partial<NonNullable<Update['message']>>
   }
 }
 
+/** @grammyjs/types intersects `Message` with `{ reply_to_message: undefined }`, which requires intersection construction under `exactOptionalPropertyTypes`. */
+function replyMessage(
+  fields: Omit<Partial<NonNullable<Update['message']>>, 'reply_to_message'>,
+): NonNullable<NonNullable<Update['message']>['reply_to_message']> {
+  const base: NonNullable<Update['message']> = botMessage(fields)
+  return Object.assign(base, { reply_to_message: undefined })
+}
+
 function observerMessage(fields: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 4,
@@ -217,14 +225,13 @@ describe('Telegram normalization', () => {
         message_id: 5,
         from: { id: 1, is_bot: false, first_name: 'admin' },
         text: '/approve',
-        reply_to_message: {
+        reply_to_message: replyMessage({
           message_id: 4,
           date: 99,
           chat: { id: snapshot.chatId, type: 'supergroup', title: 'chat' },
           from: { id: 10, is_bot: true, first_name: 'bot actor' },
           text: 'hello',
-          reply_to_message: undefined,
-        },
+        }),
       }),
     }
     expect(commandFromUpdate(update)).toMatchObject({
@@ -244,7 +251,9 @@ describe('Telegram normalization', () => {
         text: 'post',
       }),
     }
-    expect(normalizeUpdate(update)[0]).toMatchObject({ actorKind: 'channel', userId: undefined })
+    const observation = normalizeUpdate(update)[0]
+    expect(observation?.actorKind).toBe('channel')
+    expect(observation?.userId).toBeUndefined()
   })
 
   test('join service messages enroll every member without classifying service text', () => {

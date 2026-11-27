@@ -51,7 +51,12 @@ export function decisionsFor(context: StorageContext, userId: number): Decision[
     `,
     userId,
   )
-  return decisions.map((decision) => getDecision(context, decision.id)!)
+  const results: Decision[] = []
+  for (const decision of decisions) {
+    const resolved = getDecision(context, decision.id)
+    if (resolved) results.push(resolved)
+  }
+  return results
 }
 
 export function recentDecisions(
@@ -92,7 +97,8 @@ export function recentDecisions(
       : [canonical, JSON.stringify(verdicts), Math.max(1, Math.min(25, limit))]),
   )
 
-  return rows.map((row) => {
+  const results: RecentDecision[] = []
+  for (const row of rows) {
     const classification = decode(row.payload, ClassificationSchema)
     let snippet = ''
     if (row.snapshotPayload) {
@@ -107,7 +113,7 @@ export function recentDecisions(
         snippet = ''
       }
     }
-    return {
+    results.push({
       ...classification,
       id: row.id,
       chatId: context.resolveChatId(row.chatId),
@@ -120,8 +126,9 @@ export function recentDecisions(
       displayName: row.displayName ?? null,
       mode: row.actionMode ?? context.settings.mode,
       snippet,
-    }
-  })
+    })
+  }
+  return results
 }
 
 export function resolveUsername(
@@ -253,23 +260,25 @@ export function status(context: StorageContext, chatId?: number): Record<string,
   const where = chatId === undefined ? '' : ' WHERE chatId=?'
   const args = chatId === undefined ? [] : [chatId]
   for (const table of ['subjects', 'decisions', 'snapshots']) {
-    result[table] = context.get<{
+    result[table] =
+      context.get<{
+        n: number
+      }>(
+        `
+  SELECT COUNT(*) AS n FROM ${table}${where}
+`,
+        ...args,
+      )?.n ?? 0
+  }
+  result.messages =
+    context.get<{
       n: number
     }>(
       `
-  SELECT COUNT(*) AS n FROM ${table}${where}
-`,
-      ...args,
-    )!.n
-  }
-  result.messages = context.get<{
-    n: number
-  }>(
-    `
   SELECT COUNT(*) AS n FROM messages${chatId === undefined ? '' : ' WHERE chatId IN (SELECT aliasId FROM chat_aliases WHERE canonicalId=?)'}
 `,
-    ...args,
-  )!.n
+      ...args,
+    )?.n ?? 0
   for (const table of ['jobs', 'actions']) {
     for (const row of context.all<{
       state: string
@@ -283,22 +292,24 @@ export function status(context: StorageContext, chatId?: number): Record<string,
       result[`${table}_${row.state}`] = row.n
     }
   }
-  result.approved = context.get<{
-    n: number
-  }>(
-    `
+  result.approved =
+    context.get<{
+      n: number
+    }>(
+      `
   SELECT COUNT(*) AS n FROM subjects WHERE approved IS NOT NULL${chatId === undefined ? '' : ' AND chatId=?'}
 `,
-    ...args,
-  )!.n
-  result.command_backlog = context.get<{
-    n: number
-  }>(
-    `
+      ...args,
+    )?.n ?? 0
+  result.command_backlog =
+    context.get<{
+      n: number
+    }>(
+      `
   SELECT COUNT(*) AS n FROM commands WHERE state!='done'${chatId === undefined ? '' : " AND json_extract(payload,'$.chatId') IN (SELECT aliasId FROM chat_aliases WHERE canonicalId=?)"}
 `,
-    ...args,
-  )!.n
+      ...args,
+    )?.n ?? 0
   return result
 }
 

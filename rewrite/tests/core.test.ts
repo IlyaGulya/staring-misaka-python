@@ -68,18 +68,23 @@ function restart(store: Store, settings: Settings, clock: { now: number }): Stor
   return open(settings, clock)
 }
 
-function message(messageId = 10, extras: Partial<Observation> = {}): Observation {
+function message(
+  messageId = 10,
+  extras: Partial<Omit<Observation, 'userId'>> & { userId?: number | undefined } = {},
+): Observation {
+  const { userId = 42, ...rest } = extras
+  const hasExplicitUndefinedUserId = 'userId' in extras && extras.userId === undefined
   return {
     source: 'observer',
     sourceKey: `message:${messageId}`,
     kind: 'message',
     chatId: -100,
     messageId,
-    userId: 42,
+    ...(hasExplicitUndefinedUserId ? {} : { userId }),
     actorKind: 'user',
     text: 'hello',
     occurredAt: 10_000,
-    ...extras,
+    ...rest,
   }
 }
 
@@ -723,7 +728,7 @@ describe('durable moderation state machine', () => {
     const settings = configuration()
     const sourcePath = join(directories[directories.length - 1]!, 'legacy.sqlite')
     const source = new Database(sourcePath)
-    source.exec(`CREATE TABLE approved_users(id INTEGER PRIMARY KEY,user_id INTEGER,chat_id INTEGER);
+    source.run(`CREATE TABLE approved_users(id INTEGER PRIMARY KEY,user_id INTEGER,chat_id INTEGER);
       INSERT INTO approved_users VALUES(1,42,-100);
       CREATE TABLE new_users(id INTEGER PRIMARY KEY,user_id INTEGER,chat_id INTEGER);
       INSERT INTO new_users VALUES(1,43,-100);

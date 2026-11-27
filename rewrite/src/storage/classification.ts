@@ -146,7 +146,8 @@ function buildCausalContext(
   }
 
   budgeted.sort((a, b) => a.seq - b.seq)
-  const messages: ContextMessage[] = budgeted.map((row) => {
+  const messages: ContextMessage[] = []
+  for (const row of budgeted) {
     let parsedMeta: Record<string, unknown> = {}
     try {
       parsedMeta = decode(row.metadata, ObjectSchema)
@@ -156,7 +157,7 @@ function buildCausalContext(
     const text = row.text.slice(0, CONTEXT_MESSAGE_MAX_CHARS)
     if (text.length < row.text.length) truncated = true
     const sender = senderLabel(parsedMeta, row.userId)
-    return {
+    messages.push({
       messageId: row.messageId,
       ...(row.userId === null ? {} : { userId: row.userId }),
       sameAuthor: row.userId === subjectUserId,
@@ -164,8 +165,8 @@ function buildCausalContext(
       ...(sender ? { sender } : {}),
       occurredAt: row.stamp,
       text,
-    }
-  })
+    })
+  }
   return { context: messages, truncated }
 }
 
@@ -245,10 +246,18 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         subject.userId,
         subject.processedSeq,
       )
-      const mode = rows[0]!.mode
+      const firstRow = rows[0]
+      if (!firstRow) {
+        continue
+      }
+      const mode = firstRow.mode
       const boundary = rows.findIndex((revision) => revision.mode !== mode)
       if (boundary >= 0) {
         rows.length = boundary
+      }
+      const lastRow = rows.at(-1)
+      if (!lastRow) {
+        continue
       }
 
       // Soft reputation gate: established regulars skip LLM only on plain, unedited, non-burst text.
@@ -285,7 +294,7 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         })
 
         if (!riskyRevision) {
-          const highwater = rows[rows.length - 1]!.seq
+          const highwater = lastRow.seq
           context.run(
             `
             UPDATE subjects
@@ -358,7 +367,7 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         context,
         subject.chatId,
         subject.userId,
-        rows[0]!.seq,
+        firstRow.seq,
         targetMessageIds,
         replyParentIds,
         targetMinStamp,
@@ -382,7 +391,7 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         snapshot.id,
         subject.chatId,
         subject.userId,
-        rows[rows.length - 1]!.seq,
+        lastRow.seq,
         encode(snapshot),
         context.now(),
       )
@@ -407,9 +416,13 @@ export function claimClassification(context: StorageContext): ClassificationJob 
   WHERE j.id=?
 `,
         id,
-      )!
+      )
       context.audit('classification_scheduled', { id, snapshotId: snapshot.id })
     }
+  }
+
+  if (!row) {
+    return undefined
   }
 
   const token = randomUUID()
@@ -502,16 +515,17 @@ export function completeClassification(
     context.now(),
     result.verdict,
   )
-  const highwater = context.get<{
-    highwater: number
-  }>(
-    `
+  const highwater =
+    context.get<{
+      highwater: number
+    }>(
+      `
   SELECT highwater
   FROM snapshots
   WHERE id=?
 `,
-    job.snapshot.id,
-  )!.highwater
+      job.snapshot.id,
+    )?.highwater ?? 0
 
   const minChars = context.settings.reputationMinChars ?? 30
   const earnedReputation =

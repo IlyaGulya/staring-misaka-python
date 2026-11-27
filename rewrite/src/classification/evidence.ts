@@ -88,6 +88,7 @@ export async function prepareEvidence(request: EvidenceRequest): Promise<Prepare
       let image: ImageData | undefined
       if (imageCount < MAX_IMAGES && imageBytes < MAX_TOTAL_IMAGE_BYTES) {
         try {
+          // oxlint-disable-next-line no-await-in-loop -- Image downloads are bounded by running byte/count budgets.
           image = await loadEvidenceImage(media, request)
         } catch {
           if (signal.aborted) {

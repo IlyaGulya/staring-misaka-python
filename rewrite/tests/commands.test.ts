@@ -164,7 +164,7 @@ function fixture(isAdmin = false, migrated = false) {
   }
   const api: Parameters<typeof handleCommand>[3] = {
     sendMessage: async (chatId, text, options) => {
-      sent.push({ chatId, text, options })
+      sent.push(options ? { chatId, text, options } : { chatId, text })
       return { message_id: sent.length }
     },
     answerCallbackQuery: async (_id, options) => {

@@ -93,18 +93,19 @@ function parseCommand(command: Command, botUsername: string): ParsedCommand | un
   const match = /^\/([a-z_]+)(?:@([a-z0-9_]+))?(?:\s+([\s\S]*))?$/i.exec(command.text.trim())
   if (!match) return undefined
   const [, name, recipient, argumentsText = ''] = match
+  if (!name) return undefined
   if (recipient && recipient.toLowerCase() !== botUsername.toLowerCase()) return undefined
   const args = argumentsText.trim().split(/\s+/).filter(Boolean)
   const [argument] = args
-  const commandName = name!.toLowerCase()
+  const commandName = name.toLowerCase()
 
   switch (commandName) {
     case 'help':
       return { kind: 'help' }
     case 'start': {
       if (args.length === 0) return { kind: 'start', request: { kind: 'history' } }
-      if (args.length === 1 && argument!.startsWith('explain_')) {
-        const id = argument!.slice('explain_'.length)
+      if (args.length === 1 && argument !== undefined && argument.startsWith('explain_')) {
+        const id = argument.slice('explain_'.length)
         const reference: DecisionReference = UUID.test(id)
           ? { kind: 'decision', id: id.toLowerCase() }
           : { kind: 'unavailable' }
@@ -126,7 +127,10 @@ function parseCommand(command: Command, botUsername: string): ParsedCommand | un
     case 'action':
       return {
         kind: 'action',
-        actionId: args.length === 1 && UUID.test(argument!) ? argument!.toLowerCase() : undefined,
+        actionId:
+          args.length === 1 && argument !== undefined && UUID.test(argument)
+            ? argument.toLowerCase()
+            : undefined,
       }
     case 'status':
     case 'queue_status':
@@ -287,7 +291,6 @@ export async function handleCommand(
       responseChatId,
       sanitizeNotificationText(text, settings).slice(0, 4000),
       {
-        parse_mode: undefined,
         link_preview_options: { is_disabled: true },
         ...(keyboard && keyboard.length > 0 ? { reply_markup: { inline_keyboard: keyboard } } : {}),
         ...(command.messageId && !command.callbackId && responseChatId === command.chatId

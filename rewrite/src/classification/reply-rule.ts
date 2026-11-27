@@ -53,7 +53,7 @@ export async function evaluateReplyRule(
     const validLinkedId =
       linkedChatId === undefined || (Number.isSafeInteger(linkedChatId) && linkedChatId < 0)
     if (chat.id !== snapshot.chatId || !validLinkedId) return { kind: 'continue' }
-    verifiedChat = { id: chat.id, linkedChatId }
+    verifiedChat = linkedChatId === undefined ? { id: chat.id } : { id: chat.id, linkedChatId }
   } catch {
     if (signal.aborted) {
       throw new AppError({

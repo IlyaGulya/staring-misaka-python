@@ -93,7 +93,7 @@ export function runRetention(context: StorageContext): RetentionReport {
     })
   }
   try {
-    context.db.exec('PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;')
+    context.db.run('PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;')
   } catch {
     // Non-fatal maintenance hint.
   }

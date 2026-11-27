@@ -639,7 +639,7 @@ describe('Retention, health probes, admin alerts, and smart Russian UX', () => {
     }> = []
     const api: Parameters<typeof runAdminAlertCycle>[1] = {
       sendMessage: async (chatId, text, options) => {
-        sent.push({ chatId, text, options })
+        sent.push(options ? { chatId, text, options } : { chatId, text })
         return { message_id: sent.length }
       },
     }
@@ -723,7 +723,7 @@ describe('Retention, health probes, admin alerts, and smart Russian UX', () => {
     const answers: string[] = []
     const api: Parameters<typeof handleCommand>[3] = {
       sendMessage: async (chatId, text, options) => {
-        sent.push({ chatId, text, options })
+        sent.push(options ? { chatId, text, options } : { chatId, text })
         return { message_id: sent.length }
       },
       answerCallbackQuery: async (_id, opts) => {
@@ -796,7 +796,7 @@ describe('Retention, health probes, admin alerts, and smart Russian UX', () => {
     directories.push(dir)
     const dbPath = join(dir, 'v1.sqlite')
     const raw = new Database(dbPath, { create: true })
-    raw.exec(`
+    raw.run(`
       CREATE TABLE subjects (
         chatId INTEGER NOT NULL,
         userId INTEGER NOT NULL,

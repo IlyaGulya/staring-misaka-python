@@ -175,7 +175,7 @@ export function importLegacy(context: StorageContext, path: string): Record<stri
               verdict: row.is_spam ? 'spam' : 'clean',
               reason: row.reason || 'Legacy verdict',
               evidenceMessageIds: [],
-              model: row.model || 'legacy',
+              model: row.model && row.model.length > 0 ? row.model : 'legacy',
               promptVersion: 'legacy',
             }
             context.run(

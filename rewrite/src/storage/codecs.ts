@@ -6,19 +6,19 @@ export const ObjectSchema = Schema.Record(Schema.String, Schema.Unknown)
 export const MediaSchema = Schema.Array(
   Schema.Struct({
     kind: Schema.Literals(['photo', 'document', 'video', 'unsupported']),
-    fileId: Schema.optional(Schema.String),
-    blobHash: Schema.optional(Schema.String),
-    mimeType: Schema.optional(Schema.String),
-    size: Schema.optional(Schema.Number),
+    fileId: Schema.optionalKey(Schema.String),
+    blobHash: Schema.optionalKey(Schema.String),
+    mimeType: Schema.optionalKey(Schema.String),
+    size: Schema.optionalKey(Schema.Number),
   }),
 )
 
 export const ContextMessageSchema = Schema.Struct({
   messageId: Schema.Number,
-  userId: Schema.optional(Schema.Number),
+  userId: Schema.optionalKey(Schema.Number),
   sameAuthor: Schema.Boolean,
   isReplyParent: Schema.Boolean,
-  sender: Schema.optional(Schema.String),
+  sender: Schema.optionalKey(Schema.String),
   occurredAt: Schema.Number,
   text: Schema.String,
 })
@@ -38,8 +38,8 @@ export const SnapshotSchema = Schema.Struct({
       metadata: ObjectSchema,
     }),
   ),
-  context: Schema.optional(Schema.Array(ContextMessageSchema)),
-  contextTruncated: Schema.optional(Schema.Boolean),
+  context: Schema.optionalKey(Schema.Array(ContextMessageSchema)),
+  contextTruncated: Schema.optionalKey(Schema.Boolean),
 })
 
 export const ClassificationSchema = Schema.Struct({
@@ -48,7 +48,7 @@ export const ClassificationSchema = Schema.Struct({
   evidenceMessageIds: Schema.Array(Schema.Number),
   model: Schema.String,
   promptVersion: Schema.String,
-  usage: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  usage: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
 })
 
 export const CommandSchema = Schema.Struct({
@@ -56,21 +56,21 @@ export const CommandSchema = Schema.Struct({
   chatId: Schema.Number,
   userId: Schema.Number,
   text: Schema.String,
-  messageId: Schema.optional(Schema.Number),
-  replyToMessageId: Schema.optional(Schema.Number),
-  replyToUserId: Schema.optional(Schema.Number),
-  callbackId: Schema.optional(Schema.String),
+  messageId: Schema.optionalKey(Schema.Number),
+  replyToMessageId: Schema.optionalKey(Schema.Number),
+  replyToUserId: Schema.optionalKey(Schema.Number),
+  callbackId: Schema.optionalKey(Schema.String),
 })
 
 export const ActionPayloadSchema = Schema.Struct({
-  reason: Schema.optional(Schema.String),
-  messageChatId: Schema.optional(Schema.Number),
-  followup: Schema.optional(Schema.Boolean),
-  text: Schema.optional(Schema.String),
-  sentChatId: Schema.optional(Schema.Number),
-  receipt: Schema.optional(Schema.Number),
-  followupCreatedAt: Schema.optional(Schema.Number),
-  banActionId: Schema.optional(Schema.String),
+  reason: Schema.optionalKey(Schema.String),
+  messageChatId: Schema.optionalKey(Schema.Number),
+  followup: Schema.optionalKey(Schema.Boolean),
+  text: Schema.optionalKey(Schema.String),
+  sentChatId: Schema.optionalKey(Schema.Number),
+  receipt: Schema.optionalKey(Schema.Number),
+  followupCreatedAt: Schema.optionalKey(Schema.Number),
+  banActionId: Schema.optionalKey(Schema.String),
 })
 
 export function decode<T>(value: string, schema: Schema.Codec<T>): T {

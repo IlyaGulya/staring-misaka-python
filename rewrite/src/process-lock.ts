@@ -15,7 +15,7 @@ export function acquireProcessLock(dbPath: string): () => void {
   const lock = new Database(`${path}.process-lock`, { create: true })
   try {
     // SQLite must have a materialized database page before a cross-process lock is held.
-    lock.exec(
+    lock.run(
       'PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS executor_lock (id INTEGER PRIMARY KEY); BEGIN EXCLUSIVE',
     )
   } catch {

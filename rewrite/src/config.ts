@@ -55,6 +55,11 @@ function nonNegativeFloat(value: string | undefined, name: string, fallback: num
   return number
 }
 
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed && trimmed.length > 0 ? trimmed : undefined
+}
+
 function booleanFlag(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined || value === '') return fallback
   const normalized = value.trim().toLowerCase()
@@ -117,7 +122,7 @@ export function loadSettings(
   }
   if (!yaml.system_prompt.trim()) throw new Error('system_prompt is required in spam YAML')
   const chats = yaml.chats ?? {}
-  const configuredIds = env.TRACKING_CHAT_IDS?.trim() || Object.keys(chats).join(',')
+  const configuredIds = nonEmpty(env.TRACKING_CHAT_IDS) ?? Object.keys(chats).join(',')
   const chatIds = configuredIds
     .split(',')
     .filter(Boolean)
@@ -135,7 +140,7 @@ export function loadSettings(
   const mode = env.MODE ?? 'shadow'
   if (mode !== 'shadow' && mode !== 'live') throw new Error('MODE must be shadow or live')
 
-  const rawProvider = env.LLM_PROVIDER?.trim().toLowerCase() || yaml.provider
+  const rawProvider = nonEmpty(env.LLM_PROVIDER)?.toLowerCase() ?? yaml.provider
   let provider: LlmProvider
   if (rawProvider === 'openai' || rawProvider === 'anthropic') {
     provider = rawProvider
@@ -161,22 +166,33 @@ export function loadSettings(
     }
   }
 
-  const rawEffort = env.OPENAI_REASONING_EFFORT?.trim().toLowerCase() || yaml.reasoning_effort
+  const rawEffort = nonEmpty(env.OPENAI_REASONING_EFFORT)?.toLowerCase() ?? yaml.reasoning_effort
   const reasoningEffort = rawEffort ?? 'low'
   if (!Schema.is(ReasoningEffort)(reasoningEffort)) {
     throw new Error('OPENAI_REASONING_EFFORT must be none, minimal, low, medium, or high')
   }
 
   const model =
-    env.LLM_MODEL?.trim() ||
-    (provider === 'openai' ? 'gpt-6-luna' : yaml.model?.trim() || 'claude-sonnet-4-5-20250929')
+    nonEmpty(env.LLM_MODEL) ??
+    (provider === 'openai' ? 'gpt-6-luna' : (nonEmpty(yaml.model) ?? 'claude-sonnet-4-5-20250929'))
   const rates = defaultRates(provider, model)
 
   const adminId = integer(env.ADMIN_ID, 'ADMIN_ID', requireSecrets ? undefined : 1)
   if (adminId <= 0) throw new Error('ADMIN_ID must be a positive user ID')
-  const observerKeys = [env.OBSERVER_API_ID, env.OBSERVER_API_HASH, env.OBSERVER_SESSION]
-  const configuredObserver = observerKeys.some(Boolean)
-  if (configuredObserver && !observerKeys.every(Boolean)) {
+  const observerApiId = env.OBSERVER_API_ID
+  const observerApiHash = env.OBSERVER_API_HASH
+  const observerSession = env.OBSERVER_SESSION
+  const configuredObserver =
+    Boolean(observerApiId) || Boolean(observerApiHash) || Boolean(observerSession)
+  const observer =
+    observerApiId && observerApiHash && observerSession
+      ? {
+          apiId: positive(observerApiId, 'OBSERVER_API_ID', 0),
+          apiHash: observerApiHash,
+          session: observerSession,
+        }
+      : undefined
+  if (configuredObserver && !observer) {
     throw new Error('OBSERVER_API_ID, OBSERVER_API_HASH and OBSERVER_SESSION must be set together')
   }
   if (requireSecrets && mode === 'live') {
@@ -256,15 +272,9 @@ export function loadSettings(
       positive(env.BAN_CLEANUP_WINDOW_SECONDS, 'BAN_CLEANUP_WINDOW_SECONDS', 86_400) * 1000,
     retentionDays: nonNegativeInteger(env.RETENTION_DAYS, 'RETENTION_DAYS', 30),
     healthPort,
-    healthHost: env.HEALTH_HOST?.trim() || '127.0.0.1',
+    healthHost: nonEmpty(env.HEALTH_HOST) ?? '127.0.0.1',
     adminBanNotifications: booleanFlag(env.ADMIN_BAN_NOTIFICATIONS, true),
     adminAlerts: booleanFlag(env.ADMIN_ALERTS, true),
-    observer: configuredObserver
-      ? {
-          apiId: positive(env.OBSERVER_API_ID, 'OBSERVER_API_ID', 0),
-          apiHash: env.OBSERVER_API_HASH!,
-          session: env.OBSERVER_SESSION!,
-        }
-      : undefined,
+    ...(observer ? { observer } : {}),
   }
 }

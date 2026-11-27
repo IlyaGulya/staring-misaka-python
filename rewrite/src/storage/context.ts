@@ -108,13 +108,17 @@ export class StorageContext {
   }
 
   subject(chatId: number, userId: number): SubjectRecord {
-    return this.get<SubjectRecord>(
+    const record = this.get<SubjectRecord>(
       `
       SELECT * FROM subjects WHERE chatId = ? AND userId = ?
     `,
       this.canonicalChatId(chatId),
       userId,
-    )!
+    )
+    if (!record) {
+      throw new Error(`Subject not enrolled: chat=${chatId} user=${userId}`)
+    }
+    return record
   }
 
   highwater(chatId: number, userId: number): number {
@@ -127,8 +131,8 @@ export class StorageContext {
     `,
       this.canonicalChatId(chatId),
       userId,
-    )!
-    return latest.n
+    )
+    return latest?.n ?? 0
   }
 
   delay(attempt: number, maximum: number): number {

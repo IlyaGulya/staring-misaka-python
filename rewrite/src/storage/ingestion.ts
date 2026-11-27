@@ -1,9 +1,13 @@
-import { AppError, type Observation } from '../domain'
+import { AppError, type MediaRef, type Observation } from '../domain'
 import { StorageContext } from './context'
 import type { MessageEvidenceRecord } from './records'
 import { encode, decode, ObjectSchema, MediaSchema } from './codecs'
 import { reconcileObservedNotification, addAction } from './actions'
 import { invalidateJobs } from './subject-lifecycle'
+
+function hasUsableMedia(item: MediaRef): boolean {
+  return Boolean(item.fileId) || Boolean(item.blobHash)
+}
 
 /** Workflows here run inside the Store-owned SQLite transaction unless documented otherwise. */
 export function ingestObservation(context: StorageContext, observation: Observation): boolean {
@@ -153,8 +157,10 @@ export function ingestObservation(context: StorageContext, observation: Observat
   }
   if (observation.userId !== undefined && (observation.actorKind ?? 'user') === 'user') {
     context.enroll(observation.chatId, observation.userId)
-    const normalizedUsername = observation.username?.trim().replace(/^@/, '').toLowerCase() || null
-    const displayName = observation.displayName?.trim().slice(0, 160) || null
+    const rawUsername = observation.username?.trim().replace(/^@/, '').toLowerCase()
+    const normalizedUsername = rawUsername && rawUsername.length > 0 ? rawUsername : null
+    const rawDisplayName = observation.displayName?.trim().slice(0, 160)
+    const displayName = rawDisplayName && rawDisplayName.length > 0 ? rawDisplayName : null
     if (normalizedUsername || displayName) {
       context.run(
         `
@@ -222,23 +228,32 @@ export function ingestObservation(context: StorageContext, observation: Observat
     if (media.length === 0) {
       mergedMedia = previous
     } else {
-      mergedMedia = media.map((item, index) => {
+      const merged: MediaRef[] = []
+      for (const [index, item] of media.entries()) {
         const prior = previous[index]
         const fileChanged = item.fileId && prior?.fileId && item.fileId !== prior.fileId
         const blobChanged = item.blobHash && prior?.blobHash && item.blobHash !== prior.blobHash
         if (old.source === observation.source && (fileChanged || blobChanged)) {
-          return item
+          merged.push(item)
+          continue
         }
         if (prior?.kind !== item.kind) {
-          return item
+          merged.push(item)
+          continue
         }
-        return {
-          ...prior,
-          ...item,
-          fileId: item.fileId ?? prior.fileId,
-          blobHash: item.blobHash ?? prior.blobHash,
-        }
-      })
+        const fileId = item.fileId ?? prior.fileId
+        const blobHash = item.blobHash ?? prior.blobHash
+        const mimeType = item.mimeType ?? prior.mimeType
+        const size = item.size ?? prior.size
+        merged.push({
+          kind: item.kind,
+          ...(fileId === undefined ? {} : { fileId }),
+          ...(blobHash === undefined ? {} : { blobHash }),
+          ...(mimeType === undefined ? {} : { mimeType }),
+          ...(size === undefined ? {} : { size }),
+        })
+      }
+      mergedMedia = merged
     }
     const previousMetadata = decode(old.metadata, ObjectSchema)
     if (old.source === 'bot' && observation.source !== 'bot') {
@@ -246,9 +261,7 @@ export function ingestObservation(context: StorageContext, observation: Observat
     } else {
       metadata = { ...previousMetadata, ...metadata }
     }
-    const addedUsableMedia =
-      !previous.some((item) => item.fileId || item.blobHash) &&
-      mergedMedia.some((item) => item.fileId || item.blobHash)
+    const addedUsableMedia = !previous.some(hasUsableMedia) && mergedMedia.some(hasUsableMedia)
     const sameSourceEdit =
       observation.kind === 'edit' &&
       observation.source === old.source &&

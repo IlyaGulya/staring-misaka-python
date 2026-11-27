@@ -27,12 +27,26 @@ const contentFields = [
 function messageMedia(message: Message): MediaRef[] {
   const photo = message.photo?.at(-1)
   if (photo) {
-    return [{ kind: 'photo', fileId: photo.file_id, size: photo.file_size, mimeType: 'image/jpeg' }]
+    return [
+      {
+        kind: 'photo',
+        fileId: photo.file_id,
+        ...(photo.file_size === undefined ? {} : { size: photo.file_size }),
+        mimeType: 'image/jpeg',
+      },
+    ]
   }
   for (const kind of ['document', 'video'] as const) {
     const media = message[kind]
     if (media) {
-      return [{ kind, fileId: media.file_id, size: media.file_size, mimeType: media.mime_type }]
+      return [
+        {
+          kind,
+          fileId: media.file_id,
+          ...(media.file_size === undefined ? {} : { size: media.file_size }),
+          ...(media.mime_type === undefined ? {} : { mimeType: media.mime_type }),
+        },
+      ]
     }
   }
   const unsupported = [
@@ -143,17 +157,23 @@ export function normalizeUpdate(update: Update): Observation[] {
     ]
   }
   if (message.new_chat_members) {
-    return message.new_chat_members.map((member, index) => ({
-      ...base,
-      sourceKey: `${base.sourceKey}:join:${index}`,
-      kind: 'membership',
-      userId: member.id,
-      actorKind: 'user',
-      membership: 'joined',
-      changedBy: message.from?.id,
-    }))
+    const changedBy = message.from?.id
+    const observations: Observation[] = []
+    for (const [index, member] of message.new_chat_members.entries()) {
+      observations.push({
+        ...base,
+        sourceKey: `${base.sourceKey}:join:${index}`,
+        kind: 'membership',
+        userId: member.id,
+        actorKind: 'user',
+        membership: 'joined',
+        ...(changedBy === undefined ? {} : { changedBy }),
+      })
+    }
+    return observations
   }
   if (message.left_chat_member) {
+    const changedBy = message.from?.id
     return [
       {
         ...base,
@@ -161,7 +181,7 @@ export function normalizeUpdate(update: Update): Observation[] {
         userId: message.left_chat_member.id,
         actorKind: 'user',
         membership: 'left',
-        changedBy: message.from?.id,
+        ...(changedBy === undefined ? {} : { changedBy }),
       },
     ]
   }
@@ -173,17 +193,19 @@ export function normalizeUpdate(update: Update): Observation[] {
   let actorKind: Observation['actorKind'] = 'unknown'
   if (message.sender_chat) actorKind = 'channel'
   else if (sender) actorKind = 'user'
+  const userId = message.sender_chat ? undefined : sender?.id
+  const username = sender?.username
 
   return [
     {
       ...base,
       kind: update.edited_message || update.edited_channel_post ? 'edit' : 'message',
-      userId: message.sender_chat ? undefined : sender?.id,
+      ...(userId === undefined ? {} : { userId }),
       actorKind,
-      username: sender?.username,
+      ...(username === undefined ? {} : { username }),
       displayName: [sender?.first_name, sender?.last_name].filter(Boolean).join(' '),
       text,
-      editedAt: message.edit_date === undefined ? undefined : message.edit_date * 1000,
+      ...(message.edit_date === undefined ? {} : { editedAt: message.edit_date * 1000 }),
       media: messageMedia(message),
       metadata: messageMetadata(message, text),
     },
@@ -193,8 +215,9 @@ export function normalizeUpdate(update: Update): Observation[] {
 export function commandFromUpdate(update: Update): Command | undefined {
   if (update.callback_query) {
     const callback = update.callback_query
+    const data = callback.data
     const supportedCallback =
-      callback.data?.startsWith('undo:') || callback.data?.startsWith('approve:')
+      data !== undefined && (data.startsWith('undo:') || data.startsWith('approve:'))
     if (!supportedCallback || !callback.message || callback.message.date === 0) {
       return undefined
     }
@@ -202,7 +225,7 @@ export function commandFromUpdate(update: Update): Command | undefined {
       id: `bot:${update.update_id}`,
       chatId: callback.message.chat.id,
       userId: callback.from.id,
-      text: callback.data!,
+      text: data,
       messageId: callback.message.message_id,
       callbackId: callback.id,
     }
@@ -211,15 +234,17 @@ export function commandFromUpdate(update: Update): Command | undefined {
   if (!message?.from || message.sender_chat || !message.text || !isCommandText(message.text)) {
     return undefined
   }
+  const replyToMessageId = message.reply_to_message?.message_id
+  const replyToUserId = message.reply_to_message?.sender_chat
+    ? undefined
+    : message.reply_to_message?.from?.id
   return {
     id: `bot:${update.update_id}`,
     chatId: message.chat.id,
     userId: message.from.id,
     text: message.text,
     messageId: message.message_id,
-    replyToMessageId: message.reply_to_message?.message_id,
-    replyToUserId: message.reply_to_message?.sender_chat
-      ? undefined
-      : message.reply_to_message?.from?.id,
+    ...(replyToMessageId === undefined ? {} : { replyToMessageId }),
+    ...(replyToUserId === undefined ? {} : { replyToUserId }),
   }
 }

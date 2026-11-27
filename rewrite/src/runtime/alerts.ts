@@ -153,6 +153,7 @@ export async function runAdminAlertCycle(
     if (transition.notify === 'none') continue
     const text = transition.notify === 'opened' ? check.openText : check.resolvedText
     try {
+      // oxlint-disable-next-line no-await-in-loop -- Deliver admin incident alerts sequentially to preserve order and avoid rate-limit bursts.
       await api.sendMessage(
         settings.adminId,
         sanitizeNotificationText(text, settings).slice(0, 4000),

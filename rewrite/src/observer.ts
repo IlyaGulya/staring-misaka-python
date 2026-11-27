@@ -138,13 +138,16 @@ export async function runObserver(
     pendingMessages++
     messageQueue = messageQueue
       .then(async () => {
-        if (stopping) return
+        if (stopping) return undefined
         for (const observation of normalizeObserverMessage(message, edited)) {
-          const enriched = shouldDownload(observation.chatId)
-            ? await enrichObserverMedia(client, message, observation, settings, signal)
-            : observation
+          let enriched = observation
+          if (shouldDownload(observation.chatId)) {
+            // oxlint-disable-next-line no-await-in-loop -- Enrich and publish observations sequentially to preserve ordering.
+            enriched = await enrichObserverMedia(client, message, observation, settings, signal)
+          }
           publish(enriched)
         }
+        return undefined
       })
       .catch(() => {
         if (!stopping && !signal.aborted) {

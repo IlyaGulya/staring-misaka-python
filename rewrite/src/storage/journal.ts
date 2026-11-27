@@ -40,7 +40,8 @@ export function exportJournal(context: StorageContext): number {
 `,
     cursor,
   )
-  if (!rows.length) {
+  const lastRow = rows.at(-1)
+  if (!lastRow) {
     return 0
   }
   mkdirSync(dirname(context.settings.journalPath), { recursive: true })
@@ -92,7 +93,7 @@ export function exportJournal(context: StorageContext): number {
   ON CONFLICT(key)
   DO UPDATE SET value=excluded.value
 `,
-    String(rows[rows.length - 1]!.seq),
+    String(lastRow.seq),
   )
   return rows.length
 }

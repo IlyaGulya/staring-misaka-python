@@ -17,6 +17,7 @@ export async function readBoundedBody(response: Response, maxBytes: number): Pro
 
   try {
     while (true) {
+      // oxlint-disable-next-line no-await-in-loop -- Streaming body chunks must be read sequentially.
       const chunk = await reader.read()
       if (chunk.done) break
 

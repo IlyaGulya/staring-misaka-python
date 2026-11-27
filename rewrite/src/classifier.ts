@@ -72,7 +72,7 @@ export class SpamClassifier implements ClassifierPort {
             settings: this.settings,
             api: this.api,
             signal,
-            verifiedChat: replyRule.verifiedChat,
+            ...(replyRule.verifiedChat ? { verifiedChat: replyRule.verifiedChat } : {}),
           }),
         catch: failure,
       })

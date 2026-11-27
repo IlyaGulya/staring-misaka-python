@@ -59,7 +59,7 @@ export function overrideDecision(
   WHERE id=?
 `,
     decision.snapshotId,
-  )!
+  )
   invalidateJobs(context, canonical, decision.userId)
   context.run(
     `
@@ -68,7 +68,7 @@ export function overrideDecision(
   WHERE chatId=?
   AND userId=?
 `,
-    snapshot.highwater,
+    snapshot?.highwater ?? 0,
     canonical,
     decision.userId,
   )
@@ -205,7 +205,7 @@ function actionJob(row: ActionRecord, phase: ActionJob['phase']): ActionJob {
     chatId: row.chatId,
     userId: row.userId,
     generation: row.generation,
-    messageId: row.messageId ?? undefined,
+    ...(row.messageId === null ? {} : { messageId: row.messageId }),
     state: row.state,
     attempt: row.attempt,
     token: row.token,
@@ -561,7 +561,10 @@ export function completeAction(context: StorageContext, action: ActionJob, recei
     return
   }
   const subject = context.subject(row.chatId, row.userId)
-  if (row.kind === 'notify' && (!Number.isSafeInteger(receipt) || receipt! <= 0)) {
+  if (
+    row.kind === 'notify' &&
+    (receipt === undefined || !Number.isSafeInteger(receipt) || receipt <= 0)
+  ) {
     throw new AppError({
       category: 'unknown',
       message: 'Notification has no valid message receipt',
@@ -612,7 +615,7 @@ export function completeAction(context: StorageContext, action: ActionJob, recei
       row.messageChatId ?? row.chatId,
       row.messageId,
     )
-  } else if (row.kind === 'notify') {
+  } else if (row.kind === 'notify' && receipt !== undefined) {
     const sentChatId = action.payload.sentChatId ?? context.resolveChatId(row.chatId)
     context.run(
       `

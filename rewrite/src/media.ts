@@ -47,6 +47,7 @@ export async function loadImage(dbPath: string, hash: string): Promise<ImageData
     const buffer = new Uint8Array(stat.size + 1)
     let length = 0
     while (length < buffer.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Sequential file reads accumulate exact byte offsets.
       const { bytesRead } = await file.read(buffer, length, buffer.byteLength - length, length)
       if (bytesRead === 0) break
       length += bytesRead
