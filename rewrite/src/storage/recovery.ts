@@ -1,8 +1,8 @@
-import type { StorageContext } from "./context";
+import type { StorageContext } from './context'
 
 /** Reclaim abandoned leases; never replay shadow work as live moderation. */
 export function recoverInterruptedWork(context: StorageContext): void {
-  const { settings } = context;
+  const { settings } = context
 
   for (const chatId of settings.chatIds) {
     context.run(
@@ -11,16 +11,16 @@ export function recoverInterruptedWork(context: StorageContext): void {
   VALUES(?)
 `,
       chatId,
-    );
+    )
   }
   const interrupted = context.all<{
-    id: string;
-    attempt: number;
+    id: string
+    attempt: number
   }>(`
   SELECT id,attempt
   FROM jobs
   WHERE state='running'
-`);
+`)
   for (const job of interrupted) {
     context.run(
       `
@@ -31,11 +31,11 @@ export function recoverInterruptedWork(context: StorageContext): void {
       context.now() +
         (job.attempt >= settings.maxClassificationAttempts ? settings.recoveryIntervalMs : 0),
       job.id,
-    );
-    context.audit("classification_interrupted", { id: job.id, attempt: job.attempt });
+    )
+    context.audit('classification_interrupted', { id: job.id, attempt: job.attempt })
   }
   for (const action of context.all<{
-    id: string;
+    id: string
   }>(`
   SELECT id
   FROM actions
@@ -49,8 +49,8 @@ export function recoverInterruptedWork(context: StorageContext): void {
 `,
       context.now(),
       action.id,
-    );
-    context.audit("action_interrupted", { id: action.id });
+    )
+    context.audit('action_interrupted', { id: action.id })
   }
   context.run(
     `
@@ -59,7 +59,7 @@ export function recoverInterruptedWork(context: StorageContext): void {
   WHERE finishedAt IS NULL
 `,
     context.now(),
-  );
+  )
   context.run(
     `
   UPDATE commands
@@ -67,7 +67,7 @@ export function recoverInterruptedWork(context: StorageContext): void {
   WHERE state='running'
 `,
     context.now(),
-  );
+  )
   for (const chatId of settings.chatIds) {
     context.run(
       `
@@ -76,14 +76,14 @@ export function recoverInterruptedWork(context: StorageContext): void {
 `,
       chatId,
       chatId,
-    );
+    )
   }
-  if (settings.mode === "live") {
+  if (settings.mode === 'live') {
     // Shadow evidence is historical, not a live backlog. Only future evidence may act.
     for (const row of context.all<{
-      chatId: number;
-      userId: number;
-      activeDecision: string | null;
+      chatId: number
+      userId: number
+      activeDecision: string | null
     }>(`
   SELECT s.chatId,s.userId,s.activeDecision
   FROM subjects s
@@ -101,8 +101,8 @@ export function recoverInterruptedWork(context: StorageContext): void {
         context.highwater(row.chatId, row.userId),
         row.chatId,
         row.userId,
-      );
-      context.audit("shadow_generation_closed", { decisionId: row.activeDecision });
+      )
+      context.audit('shadow_generation_closed', { decisionId: row.activeDecision })
     }
   }
 }

@@ -1,13 +1,13 @@
-import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { Database } from 'bun:sqlite'
+import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 /** Version 2 extends v1 in-place with soft reputation, budget tracking, incident alerts and admin notices. */
 export function openDatabase(path: string): Database {
-  if (path !== ":memory:") {
-    mkdirSync(dirname(path), { recursive: true });
+  if (path !== ':memory:') {
+    mkdirSync(dirname(path), { recursive: true })
   }
-  const database = new Database(path, { create: true, strict: true });
+  const database = new Database(path, { create: true, strict: true })
   database.exec(`
   PRAGMA journal_mode=WAL;
   PRAGMA synchronous=FULL;
@@ -204,29 +204,29 @@ export function openDatabase(path: string): Database {
     error TEXT,
     createdAt INTEGER NOT NULL
   );
-`);
+`)
 
   // Idempotent v1 -> v2 column upgrades for existing databases.
   const columns = new Set(
     database
-      .query<{ name: string }, []>("PRAGMA table_info(subjects)")
+      .query<{ name: string }, []>('PRAGMA table_info(subjects)')
       .all()
       .map((column) => column.name),
-  );
-  if (!columns.has("cleanCount")) {
-    database.exec("ALTER TABLE subjects ADD COLUMN cleanCount INTEGER NOT NULL DEFAULT 0");
+  )
+  if (!columns.has('cleanCount')) {
+    database.exec('ALTER TABLE subjects ADD COLUMN cleanCount INTEGER NOT NULL DEFAULT 0')
   }
-  if (!columns.has("lastCleanAt")) {
-    database.exec("ALTER TABLE subjects ADD COLUMN lastCleanAt INTEGER NOT NULL DEFAULT 0");
+  if (!columns.has('lastCleanAt')) {
+    database.exec('ALTER TABLE subjects ADD COLUMN lastCleanAt INTEGER NOT NULL DEFAULT 0')
   }
-  if (!columns.has("username")) {
-    database.exec("ALTER TABLE subjects ADD COLUMN username TEXT");
+  if (!columns.has('username')) {
+    database.exec('ALTER TABLE subjects ADD COLUMN username TEXT')
   }
-  if (!columns.has("displayName")) {
-    database.exec("ALTER TABLE subjects ADD COLUMN displayName TEXT");
+  if (!columns.has('displayName')) {
+    database.exec('ALTER TABLE subjects ADD COLUMN displayName TEXT')
   }
-  database.exec("CREATE INDEX IF NOT EXISTS subjects_username ON subjects(chatId,username)");
-  database.exec("PRAGMA user_version=2");
+  database.exec('CREATE INDEX IF NOT EXISTS subjects_username ON subjects(chatId,username)')
+  database.exec('PRAGMA user_version=2')
 
-  return database;
+  return database
 }

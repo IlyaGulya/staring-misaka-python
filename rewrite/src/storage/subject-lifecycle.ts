@@ -1,4 +1,4 @@
-import type { StorageContext } from "./context";
+import type { StorageContext } from './context'
 
 /** Cancel leases and consume their evidence inside the caller's approval/migration transaction. */
 export function invalidateJobs(context: StorageContext, chatId: number, userId: number): void {
@@ -12,7 +12,7 @@ export function invalidateJobs(context: StorageContext, chatId: number, userId: 
   `,
     chatId,
     userId,
-  );
+  )
 
   for (const job of jobs) {
     context.run(
@@ -24,8 +24,8 @@ export function invalidateJobs(context: StorageContext, chatId: number, userId: 
       job.highwater,
       chatId,
       userId,
-    );
-    context.finishAttempt("classification", job.id, job.token, "cancelled");
+    )
+    context.finishAttempt('classification', job.id, job.token, 'cancelled')
   }
 
   context.run(
@@ -37,5 +37,5 @@ export function invalidateJobs(context: StorageContext, chatId: number, userId: 
   `,
     chatId,
     userId,
-  );
+  )
 }

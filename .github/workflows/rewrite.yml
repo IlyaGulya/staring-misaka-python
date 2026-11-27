@@ -43,10 +43,12 @@ jobs:
           bun-version: '1.4.2'
       - name: Install dependencies
         run: bun install --frozen-lockfile --ignore-scripts
-      - name: Check formatting
+      - name: Check formatting with oxfmt
         run: bun run format:check
       - name: Check types
         run: bun run check
+      - name: Run static analysis
+        run: bun run lint
       - name: Run tests
         run: bun test
 

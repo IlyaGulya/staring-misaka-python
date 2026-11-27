@@ -10,12 +10,12 @@ import {
   statSync,
   unlinkSync,
   writeSync,
-} from "node:fs";
-import { dirname } from "node:path";
-import { AppError } from "../domain";
-import { StorageContext } from "./context";
-import type { AuditRecord } from "./records";
-import { encode, decode, ObjectSchema } from "./codecs";
+} from 'node:fs'
+import { dirname } from 'node:path'
+import { AppError } from '../domain'
+import { StorageContext } from './context'
+import type { AuditRecord } from './records'
+import { encode, decode, ObjectSchema } from './codecs'
 
 /** At-least-once JSONL export: fsync records before advancing the SQLite cursor.
  * A crash may duplicate records; seq is the stable deduplication key.
@@ -23,13 +23,13 @@ import { encode, decode, ObjectSchema } from "./codecs";
 export function exportJournal(context: StorageContext): number {
   const cursor = Number(
     context.get<{
-      value: string;
+      value: string
     }>(`
   SELECT value
   FROM meta
   WHERE key='journalCursor'
 `)?.value ?? 0,
-  );
+  )
   const rows = context.all<AuditRecord>(
     `
   SELECT *
@@ -39,31 +39,31 @@ export function exportJournal(context: StorageContext): number {
   LIMIT 1000
 `,
     cursor,
-  );
+  )
   if (!rows.length) {
-    return 0;
+    return 0
   }
-  mkdirSync(dirname(context.settings.journalPath), { recursive: true });
+  mkdirSync(dirname(context.settings.journalPath), { recursive: true })
   if (existsSync(context.settings.journalPath)) {
-    truncatePartialJournal(context.settings.journalPath);
+    truncatePartialJournal(context.settings.journalPath)
   }
   if (
     existsSync(context.settings.journalPath) &&
     statSync(context.settings.journalPath).size >= 20 * 1024 * 1024
   ) {
-    const oldest = `${context.settings.journalPath}.5`;
+    const oldest = `${context.settings.journalPath}.5`
     if (existsSync(oldest)) {
-      unlinkSync(oldest);
+      unlinkSync(oldest)
     }
     for (let index = 4; index >= 1; index--) {
-      const previous = `${context.settings.journalPath}.${index}`;
+      const previous = `${context.settings.journalPath}.${index}`
       if (existsSync(previous)) {
-        renameSync(previous, `${context.settings.journalPath}.${index + 1}`);
+        renameSync(previous, `${context.settings.journalPath}.${index + 1}`)
       }
     }
-    renameSync(context.settings.journalPath, `${context.settings.journalPath}.1`);
+    renameSync(context.settings.journalPath, `${context.settings.journalPath}.1`)
   }
-  const fd = openSync(context.settings.journalPath, "a", 0o600);
+  const fd = openSync(context.settings.journalPath, 'a', 0o600)
   try {
     const buffer = Buffer.from(
       rows
@@ -75,15 +75,15 @@ export function exportJournal(context: StorageContext): number {
             payload: decode(row.payload, ObjectSchema),
           }),
         )
-        .join("\n") + "\n",
-    );
-    let offset = 0;
+        .join('\n') + '\n',
+    )
+    let offset = 0
     while (offset < buffer.length) {
-      offset += writeSync(fd, buffer, offset, buffer.length - offset);
+      offset += writeSync(fd, buffer, offset, buffer.length - offset)
     }
-    fsyncSync(fd);
+    fsyncSync(fd)
   } finally {
-    closeSync(fd);
+    closeSync(fd)
   }
   context.run(
     `
@@ -93,43 +93,43 @@ export function exportJournal(context: StorageContext): number {
   DO UPDATE SET value=excluded.value
 `,
     String(rows[rows.length - 1]!.seq),
-  );
-  return rows.length;
+  )
+  return rows.length
 }
 
 /** A crash can leave an uncommitted partial JSONL record; SQLite remains authoritative. */
 function truncatePartialJournal(path: string): void {
-  const size = statSync(path).size;
+  const size = statSync(path).size
   if (!size) {
-    return;
+    return
   }
-  const fd = openSync(path, "r+");
+  const fd = openSync(path, 'r+')
   try {
-    const buffer = Buffer.alloc(Math.min(size, 4096));
-    let position = size;
+    const buffer = Buffer.alloc(Math.min(size, 4096))
+    let position = size
     while (position > 0) {
-      const count = Math.min(position, buffer.length);
-      position -= count;
-      const read = readSync(fd, buffer, 0, count, position);
+      const count = Math.min(position, buffer.length)
+      position -= count
+      const read = readSync(fd, buffer, 0, count, position)
       if (read !== count) {
         throw new AppError({
-          category: "transient",
-          message: "Journal changed during tail recovery",
-        });
+          category: 'transient',
+          message: 'Journal changed during tail recovery',
+        })
       }
-      const newline = buffer.subarray(0, count).lastIndexOf(10);
+      const newline = buffer.subarray(0, count).lastIndexOf(10)
       if (newline >= 0) {
-        const complete = position + newline + 1;
+        const complete = position + newline + 1
         if (complete !== size) {
-          ftruncateSync(fd, complete);
-          fsyncSync(fd);
+          ftruncateSync(fd, complete)
+          fsyncSync(fd)
         }
-        return;
+        return
       }
     }
-    ftruncateSync(fd, 0);
-    fsyncSync(fd);
+    ftruncateSync(fd, 0)
+    fsyncSync(fd)
   } finally {
-    closeSync(fd);
+    closeSync(fd)
   }
 }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID } from 'node:crypto'
 import {
   AppError,
   type Action,
@@ -8,23 +8,23 @@ import {
   type Observation,
   type Membership,
   type Settings,
-} from "../domain";
-import { StorageContext } from "./context";
-import type { ActionRecord, SubjectRecord } from "./records";
-import { encode, decode, ActionPayloadSchema } from "./codecs";
-import { getDecision } from "./queries";
-import { invalidateJobs } from "./subject-lifecycle";
-import { notificationText, cancelledNotificationText } from "../notifications";
+} from '../domain'
+import { StorageContext } from './context'
+import type { ActionRecord, SubjectRecord } from './records'
+import { encode, decode, ActionPayloadSchema } from './codecs'
+import { getDecision } from './queries'
+import { invalidateJobs } from './subject-lifecycle'
+import { notificationText, cancelledNotificationText } from '../notifications'
 
 /** Workflows here run inside the Store-owned SQLite transaction unless documented otherwise. */
 export interface ActionRequest {
-  kind: Action["kind"];
-  decisionId: string;
-  subject: SubjectRecord;
-  messageId?: number;
-  payload: ActionPayload;
-  retryAt?: number;
-  originatingMode?: Settings["mode"];
+  kind: Action['kind']
+  decisionId: string
+  subject: SubjectRecord
+  messageId?: number
+  payload: ActionPayload
+  retryAt?: number
+  originatingMode?: Settings['mode']
 }
 
 export function overrideDecision(
@@ -32,11 +32,11 @@ export function overrideDecision(
   decisionId: string,
   actorId: number,
 ): void {
-  const decision = getDecision(context, decisionId);
+  const decision = getDecision(context, decisionId)
   if (!decision) {
-    throw new AppError({ category: "invalid", message: "Unknown decision" });
+    throw new AppError({ category: 'invalid', message: 'Unknown decision' })
   }
-  const canonical = context.canonicalChatId(decision.chatId);
+  const canonical = context.canonicalChatId(decision.chatId)
   if (
     !context.run(
       `
@@ -48,10 +48,10 @@ export function overrideDecision(
       context.now(),
     )
   ) {
-    return;
+    return
   }
   const snapshot = context.get<{
-    highwater: number;
+    highwater: number
   }>(
     `
   SELECT highwater
@@ -59,8 +59,8 @@ export function overrideDecision(
   WHERE id=?
 `,
     decision.snapshotId,
-  )!;
-  invalidateJobs(context, canonical, decision.userId);
+  )!
+  invalidateJobs(context, canonical, decision.userId)
   context.run(
     `
   UPDATE subjects
@@ -71,7 +71,7 @@ export function overrideDecision(
     snapshot.highwater,
     canonical,
     decision.userId,
-  );
+  )
   context.run(
     `
   UPDATE actions
@@ -83,7 +83,7 @@ export function overrideDecision(
   AND sentAt IS NULL
 `,
     decisionId,
-  );
+  )
   context.run(
     `
   UPDATE actions
@@ -92,7 +92,7 @@ export function overrideDecision(
   AND kind='ban'
 `,
     decisionId,
-  );
+  )
   const ban = context.get<ActionRecord>(
     `
   SELECT *
@@ -101,10 +101,10 @@ export function overrideDecision(
   AND kind='ban'
 `,
     decisionId,
-  );
-  if (ban?.state === "confirmed") {
-    queueUndo(context, ban);
-  } else if (ban && ["unknown", "sending", "reconciling", "preflight"].includes(ban.state)) {
+  )
+  if (ban?.state === 'confirmed') {
+    queueUndo(context, ban)
+  } else if (ban && ['unknown', 'sending', 'reconciling', 'preflight'].includes(ban.state)) {
     // Preserve the lease: a late successful receipt is necessary to establish ownership.
     context.run(
       `
@@ -114,17 +114,17 @@ export function overrideDecision(
 `,
       context.now(),
       ban.id,
-    );
-  } else if (ban?.state === "needs_attention") {
-    context.audit("undo_needs_attention", {
+    )
+  } else if (ban?.state === 'needs_attention') {
+    context.audit('undo_needs_attention', {
       decisionId,
-      reason: "restriction ownership is ambiguous",
-    });
+      reason: 'restriction ownership is ambiguous',
+    })
   } else {
-    clearActive(context, decisionId);
+    clearActive(context, decisionId)
   }
   const notification = context.get<{
-    payload: string;
+    payload: string
   }>(
     `
   SELECT payload
@@ -134,44 +134,44 @@ export function overrideDecision(
   AND state='confirmed'
 `,
     decisionId,
-  );
+  )
   if (notification) {
-    const payload = decode(notification.payload, ActionPayloadSchema);
-    if (typeof payload.receipt === "number" && Number.isSafeInteger(payload.receipt)) {
+    const payload = decode(notification.payload, ActionPayloadSchema)
+    if (typeof payload.receipt === 'number' && Number.isSafeInteger(payload.receipt)) {
       addAction(context, {
-        kind: "edit",
+        kind: 'edit',
         decisionId: decisionId,
         subject: context.subject(canonical, decision.userId),
         messageId: payload.receipt,
         payload: {
           followup: true,
           text: cancelledNotificationText,
-          messageChatId: Number(payload.sentChatId ?? context.resolveChatId(canonical)),
+          messageChatId: payload.sentChatId ?? context.resolveChatId(canonical),
         },
-      });
+      })
     }
   }
-  context.audit("decision_overridden", { decisionId, actorId });
+  context.audit('decision_overridden', { decisionId, actorId })
 }
 
 export function addAction(context: StorageContext, request: ActionRequest): void {
-  const { kind, decisionId, subject, messageId, payload, retryAt = 0, originatingMode } = request;
-  let mode = context.settings.mode;
-  if (mode !== "shadow") {
+  const { kind, decisionId, subject, messageId, payload, retryAt = 0, originatingMode } = request
+  let mode = context.settings.mode
+  if (mode !== 'shadow') {
     if (originatingMode !== undefined) {
-      mode = originatingMode;
+      mode = originatingMode
     } else {
-      const ban = context.get<{ mode: Settings["mode"] }>(
+      const ban = context.get<{ mode: Settings['mode'] }>(
         `
               SELECT mode FROM actions WHERE decisionId = ? AND kind = 'ban'
             `,
         decisionId,
-      );
-      mode = ban?.mode ?? context.settings.mode;
+      )
+      mode = ban?.mode ?? context.settings.mode
     }
   }
-  const state = mode === "shadow" || context.settings.mode === "shadow" ? "shadow" : "pending";
-  const id = randomUUID();
+  const state = mode === 'shadow' || context.settings.mode === 'shadow' ? 'shadow' : 'pending'
+  const id = randomUUID()
   if (
     context.run(
       `
@@ -185,7 +185,7 @@ export function addAction(context: StorageContext, request: ActionRequest): void
       subject.userId,
       subject.generation,
       messageId ?? null,
-      kind === "delete" || kind === "edit" ? Number(payload.messageChatId ?? subject.chatId) : null,
+      kind === 'delete' || kind === 'edit' ? (payload.messageChatId ?? subject.chatId) : null,
       state,
       encode(payload),
       mode,
@@ -193,11 +193,11 @@ export function addAction(context: StorageContext, request: ActionRequest): void
       context.now(),
     )
   ) {
-    context.audit("action_scheduled", { id, kind, decisionId, state, messageId });
+    context.audit('action_scheduled', { id, kind, decisionId, state, messageId })
   }
 }
 
-function actionJob(row: ActionRecord, phase: ActionJob["phase"]): ActionJob {
+function actionJob(row: ActionRecord, phase: ActionJob['phase']): ActionJob {
   return {
     id: row.id,
     kind: row.kind,
@@ -212,7 +212,7 @@ function actionJob(row: ActionRecord, phase: ActionJob["phase"]): ActionJob {
     payload: decode(row.payload, ActionPayloadSchema),
     phase,
     undoRequested: Boolean(row.undoRequested),
-  };
+  }
 }
 
 /** Only an exact, timely receipt authored by our bot can resolve an uncertain notification. */
@@ -221,17 +221,17 @@ export function reconcileObservedNotification(
   observation: Observation,
 ): void {
   if (
-    (observation.kind !== "message" && observation.kind !== "edit") ||
+    (observation.kind !== 'message' && observation.kind !== 'edit') ||
     context.botId === 0 ||
     observation.userId !== context.botId ||
     observation.messageId === undefined ||
     !observation.text
   ) {
-    return;
+    return
   }
-  const decisionId = observation.text.match(/start=explain_([0-9a-f-]{36})$/)?.[1];
+  const decisionId = observation.text.match(/start=explain_([0-9a-f-]{36})$/)?.[1]
   if (!decisionId) {
-    return;
+    return
   }
   const notification = context.get<ActionRecord>(
     `
@@ -241,30 +241,30 @@ export function reconcileObservedNotification(
           AND sentAt IS NOT NULL
     `,
     decisionId,
-  );
+  )
   if (!notification || notification.sentAt === null) {
-    return;
+    return
   }
-  const payload = decode(notification.payload, ActionPayloadSchema);
-  const earliestReceipt = Math.floor(notification.sentAt / 1000) * 1000;
+  const payload = decode(notification.payload, ActionPayloadSchema)
+  const earliestReceipt = Math.floor(notification.sentAt / 1000) * 1000
   if (
     payload.text !== observation.text ||
     payload.sentChatId !== observation.chatId ||
     observation.occurredAt < earliestReceipt
   ) {
-    return;
+    return
   }
 
-  context.finishAttempt("action", notification.id, notification.token, "observed_confirmed");
-  const token = randomUUID();
+  context.finishAttempt('action', notification.id, notification.token, 'observed_confirmed')
+  const token = randomUUID()
   context.run(
     `
         UPDATE actions SET state = 'sending', token = ? WHERE id = ?
     `,
     token,
     notification.id,
-  );
-  const recovered = actionJob({ ...notification, token }, "reconcile");
+  )
+  const recovered = actionJob({ ...notification, token }, 'reconcile')
   completeAction(
     context,
     {
@@ -272,17 +272,17 @@ export function reconcileObservedNotification(
       payload: { ...recovered.payload, followupCreatedAt: observation.occurredAt },
     },
     observation.messageId,
-  );
-  context.audit("notification_receipt_observed", {
+  )
+  context.audit('notification_receipt_observed', {
     actionId: notification.id,
     chatId: observation.chatId,
     messageId: observation.messageId,
-  });
+  })
 }
 
 export function claimAction(context: StorageContext): ActionJob | undefined {
-  if (context.settings.mode !== "live") {
-    return undefined;
+  if (context.settings.mode !== 'live') {
+    return undefined
   }
   const row = context.get<ActionRecord>(
     `
@@ -311,24 +311,24 @@ export function claimAction(context: StorageContext): ActionJob | undefined {
     `,
     context.now(),
     context.now(),
-  );
+  )
   if (!row) {
-    return undefined;
+    return undefined
   }
-  const phase = row.state === "unknown" ? "reconcile" : "preflight";
-  const token = randomUUID();
+  const phase = row.state === 'unknown' ? 'reconcile' : 'preflight'
+  const token = randomUUID()
   context.run(
     `
   UPDATE actions
   SET state=?,attempt=attempt+1,token=?,preflightEpoch=?
   WHERE id=?
 `,
-    phase === "reconcile" ? "reconciling" : "preflight",
+    phase === 'reconcile' ? 'reconciling' : 'preflight',
     token,
     context.subject(row.chatId, row.userId).restrictionEpoch,
     row.id,
-  );
-  if (row.kind === "notify") {
+  )
+  if (row.kind === 'notify') {
     context.run(
       `
   UPDATE chats
@@ -337,10 +337,10 @@ export function claimAction(context: StorageContext): ActionJob | undefined {
 `,
       context.now() + 30000,
       row.chatId,
-    );
+    )
   }
-  context.startAttempt("action", row.id, row.attempt + 1, token);
-  return actionJob({ ...row, token, attempt: row.attempt + 1 }, phase);
+  context.startAttempt('action', row.id, row.attempt + 1, token)
+  return actionJob({ ...row, token, attempt: row.attempt + 1 }, phase)
 }
 
 export function prepareAction(
@@ -359,13 +359,13 @@ export function prepareAction(
 `,
     action.id,
     action.token,
-  );
+  )
   if (!row) {
-    return false;
+    return false
   }
-  const subject = context.subject(row.chatId, row.userId);
+  const subject = context.subject(row.chatId, row.userId)
   if (targetChatId !== undefined && targetChatId !== context.resolveChatId(row.chatId)) {
-    if (action.phase === "reconcile") {
+    if (action.phase === 'reconcile') {
       context.run(
         `
   UPDATE actions
@@ -374,24 +374,24 @@ export function prepareAction(
 `,
         context.now() + context.settings.recoveryIntervalMs,
         row.id,
-      );
-      context.finishAttempt("action", row.id, row.token, "destination_changed");
-      context.audit("action_reconciliation_deferred", { id: row.id });
+      )
+      context.finishAttempt('action', row.id, row.token, 'destination_changed')
+      context.audit('action_reconciliation_deferred', { id: row.id })
     } else {
-      retryReconciled(context, row);
+      retryReconciled(context, row)
     }
-    return false;
+    return false
   }
   if (
-    (row.kind === "ban" || row.kind === "unban") &&
+    (row.kind === 'ban' || row.kind === 'unban') &&
     row.preflightEpoch !== subject.restrictionEpoch
   ) {
-    attention(context, row, "Restriction changed while membership was being checked");
-    return false;
+    attention(context, row, 'Restriction changed while membership was being checked')
+    return false
   }
-  if (row.kind === "ban") {
+  if (row.kind === 'ban') {
     if (!membership) {
-      throw new AppError({ category: "invalid", message: "Ban requires membership preflight" });
+      throw new AppError({ category: 'invalid', message: 'Ban requires membership preflight' })
     }
     if (
       row.undoRequested ||
@@ -406,31 +406,31 @@ export function prepareAction(
       subject.approved ||
       subject.activeDecision !== row.decisionId
     ) {
-      if (action.phase === "reconcile" && membership.restricted) {
-        attention(context, row, "Interrupted ban is present but ownership cannot be proven");
+      if (action.phase === 'reconcile' && membership.restricted) {
+        attention(context, row, 'Interrupted ban is present but ownership cannot be proven')
       } else {
-        terminalAction(context, row, "cancelled");
-        clearActive(context, row.decisionId);
+        terminalAction(context, row, 'cancelled')
+        clearActive(context, row.decisionId)
       }
-      return false;
+      return false
     }
     if (membership.restricted) {
-      attention(context, row, "Existing restriction has no confirmed receipt owned by this action");
-      return false;
+      attention(context, row, 'Existing restriction has no confirmed receipt owned by this action')
+      return false
     }
-    if (action.phase === "reconcile") {
-      retryReconciled(context, row);
-      return false;
+    if (action.phase === 'reconcile') {
+      retryReconciled(context, row)
+      return false
     }
   }
-  if (row.kind === "unban") {
+  if (row.kind === 'unban') {
     if (!membership) {
-      throw new AppError({ category: "invalid", message: "Unban requires membership preflight" });
+      throw new AppError({ category: 'invalid', message: 'Unban requires membership preflight' })
     }
     if (!membership.restricted) {
-      terminalAction(context, row, "confirmed");
-      clearActive(context, row.decisionId);
-      return false;
+      terminalAction(context, row, 'confirmed')
+      clearActive(context, row.decisionId)
+      return false
     }
     const ban = context.get<ActionRecord>(
       `
@@ -440,14 +440,14 @@ export function prepareAction(
   AND kind='ban'
 `,
       row.decisionId,
-    );
+    )
     if (
-      action.phase === "reconcile" ||
+      action.phase === 'reconcile' ||
       !ban?.owned ||
       ban.ownershipEpoch !== subject.restrictionEpoch ||
       subject.activeDecision !== row.decisionId ||
       !context.get<{
-        1: number;
+        1: number
       }>(
         `
   SELECT 1
@@ -457,12 +457,12 @@ export function prepareAction(
         row.decisionId,
       )
     ) {
-      attention(context, row, "Cannot safely remove an ambiguous or newer restriction");
-      return false;
+      attention(context, row, 'Cannot safely remove an ambiguous or newer restriction')
+      return false
     }
   }
   if (
-    (row.kind === "delete" || row.kind === "notify") &&
+    (row.kind === 'delete' || row.kind === 'notify') &&
     !decode(row.payload, ActionPayloadSchema).followup &&
     context.get<{ 1: number }>(
       `
@@ -473,15 +473,15 @@ export function prepareAction(
       row.decisionId,
     )
   ) {
-    terminalAction(context, row, "cancelled");
-    return false;
+    terminalAction(context, row, 'cancelled')
+    return false
   }
-  if (row.kind === "notify" && action.phase === "reconcile") {
-    attention(context, row, "Notification outcome unknown; not duplicated");
-    return false;
+  if (row.kind === 'notify' && action.phase === 'reconcile') {
+    attention(context, row, 'Notification outcome unknown; not duplicated')
+    return false
   }
   if (
-    row.kind === "edit" &&
+    row.kind === 'edit' &&
     context.get<{ 1: number }>(
       `
       SELECT 1
@@ -498,10 +498,10 @@ export function prepareAction(
       row.messageChatId,
     )
   ) {
-    terminalAction(context, row, "cancelled");
-    return false;
+    terminalAction(context, row, 'cancelled')
+    return false
   }
-  if (row.kind === "notify") {
+  if (row.kind === 'notify') {
     context.run(
       `
   UPDATE actions
@@ -514,7 +514,7 @@ export function prepareAction(
         sentChatId: targetChatId ?? context.resolveChatId(row.chatId),
       }),
       row.id,
-    );
+    )
   }
   context.run(
     `
@@ -527,8 +527,8 @@ export function prepareAction(
     context.now(),
     row.id,
     action.token,
-  );
-  return true;
+  )
+  return true
 }
 
 function retryReconciled(context: StorageContext, row: ActionRecord): void {
@@ -540,9 +540,9 @@ function retryReconciled(context: StorageContext, row: ActionRecord): void {
 `,
     context.now() + context.delay(row.attempt, context.settings.maxActionAttempts),
     row.id,
-  );
-  context.finishAttempt("action", row.id, row.token, "reconciled_absent");
-  context.audit("action_reconciled_absent", { id: row.id });
+  )
+  context.finishAttempt('action', row.id, row.token, 'reconciled_absent')
+  context.audit('action_reconciled_absent', { id: row.id })
 }
 
 export function completeAction(context: StorageContext, action: ActionJob, receipt?: number): void {
@@ -556,20 +556,20 @@ export function completeAction(context: StorageContext, action: ActionJob, recei
 `,
     action.id,
     action.token,
-  );
+  )
   if (!row) {
-    return;
+    return
   }
-  const subject = context.subject(row.chatId, row.userId);
-  if (row.kind === "notify" && (!Number.isSafeInteger(receipt) || receipt! <= 0)) {
+  const subject = context.subject(row.chatId, row.userId)
+  if (row.kind === 'notify' && (!Number.isSafeInteger(receipt) || receipt! <= 0)) {
     throw new AppError({
-      category: "unknown",
-      message: "Notification has no valid message receipt",
-    });
+      category: 'unknown',
+      message: 'Notification has no valid message receipt',
+    })
   }
-  terminalAction(context, row, "confirmed");
-  if (row.kind === "ban") {
-    const owned = subject.restrictionEpoch === row.preflightEpoch;
+  terminalAction(context, row, 'confirmed')
+  if (row.kind === 'ban') {
+    const owned = subject.restrictionEpoch === row.preflightEpoch
     context.run(
       `
   UPDATE actions
@@ -579,13 +579,13 @@ export function completeAction(context: StorageContext, action: ActionJob, recei
       Number(owned),
       row.preflightEpoch,
       row.id,
-    );
+    )
     if (!owned) {
       attention(
         context,
-        { ...row, token: "" },
-        "Restriction changed concurrently with successful ban",
-      );
+        { ...row, token: '' },
+        'Restriction changed concurrently with successful ban',
+      )
     } else if (
       row.undoRequested ||
       context.get<{ 1: number }>(
@@ -597,11 +597,11 @@ export function completeAction(context: StorageContext, action: ActionJob, recei
         row.decisionId,
       )
     ) {
-      queueUndo(context, { ...row, owned: 1, ownershipEpoch: row.preflightEpoch });
+      queueUndo(context, { ...row, owned: 1, ownershipEpoch: row.preflightEpoch })
     }
-  } else if (row.kind === "unban") {
-    clearActive(context, row.decisionId);
-  } else if (row.kind === "delete" && row.messageId !== null) {
+  } else if (row.kind === 'unban') {
+    clearActive(context, row.decisionId)
+  } else if (row.kind === 'delete' && row.messageId !== null) {
     context.run(
       `
   UPDATE messages
@@ -611,9 +611,9 @@ export function completeAction(context: StorageContext, action: ActionJob, recei
 `,
       row.messageChatId ?? row.chatId,
       row.messageId,
-    );
-  } else if (row.kind === "notify") {
-    const sentChatId = Number(action.payload.sentChatId ?? context.resolveChatId(row.chatId));
+    )
+  } else if (row.kind === 'notify') {
+    const sentChatId = action.payload.sentChatId ?? context.resolveChatId(row.chatId)
     context.run(
       `
   UPDATE actions
@@ -622,16 +622,15 @@ export function completeAction(context: StorageContext, action: ActionJob, recei
 `,
       encode({ ...decode(row.payload, ActionPayloadSchema), receipt, sentChatId }),
       row.id,
-    );
+    )
     addAction(context, {
-      kind: "delete",
+      kind: 'delete',
       decisionId: row.decisionId,
       subject: subject,
       messageId: receipt,
       payload: { followup: true, messageChatId: sentChatId },
-      retryAt:
-        Number(action.payload.followupCreatedAt ?? context.now()) + context.settings.followupTtlMs,
-    });
+      retryAt: (action.payload.followupCreatedAt ?? context.now()) + context.settings.followupTtlMs,
+    })
     if (
       context.get<{ 1: number }>(
         `
@@ -643,32 +642,32 @@ export function completeAction(context: StorageContext, action: ActionJob, recei
       )
     ) {
       addAction(context, {
-        kind: "edit",
+        kind: 'edit',
         decisionId: row.decisionId,
         subject: subject,
         messageId: receipt,
         payload: { followup: true, text: cancelledNotificationText, messageChatId: sentChatId },
-      });
+      })
     }
   }
 }
 
 function queueUndo(context: StorageContext, ban: ActionRecord): void {
-  const subject = context.subject(ban.chatId, ban.userId);
+  const subject = context.subject(ban.chatId, ban.userId)
   if (
     !ban.owned ||
     subject.restrictionEpoch !== ban.ownershipEpoch ||
     subject.activeDecision !== ban.decisionId
   ) {
-    attention(context, ban, "Undo refused: restriction ownership is ambiguous or superseded");
-    return;
+    attention(context, ban, 'Undo refused: restriction ownership is ambiguous or superseded')
+    return
   }
   addAction(context, {
-    kind: "unban",
+    kind: 'unban',
     decisionId: ban.decisionId,
     subject: subject,
     payload: { banActionId: ban.id },
-  });
+  })
 }
 
 function clearActive(context: StorageContext, decisionId: string): void {
@@ -679,13 +678,13 @@ function clearActive(context: StorageContext, decisionId: string): void {
         WHERE activeDecision = ?
     `,
     decisionId,
-  );
+  )
 }
 
 function terminalAction(
   context: StorageContext,
   row: ActionRecord,
-  state: "confirmed" | "cancelled",
+  state: 'confirmed' | 'cancelled',
 ): void {
   context.run(
     `
@@ -694,11 +693,11 @@ function terminalAction(
   WHERE id=?
 `,
     state,
-    state === "confirmed" ? context.now() : null,
+    state === 'confirmed' ? context.now() : null,
     row.id,
-  );
-  context.finishAttempt("action", row.id, row.token, state);
-  context.audit(`action_${state}`, { id: row.id, kind: row.kind, decisionId: row.decisionId });
+  )
+  context.finishAttempt('action', row.id, row.token, state)
+  context.audit(`action_${state}`, { id: row.id, kind: row.kind, decisionId: row.decisionId })
 }
 
 function attention(context: StorageContext, row: ActionRecord, error: string): void {
@@ -710,9 +709,9 @@ function attention(context: StorageContext, row: ActionRecord, error: string): v
 `,
     error,
     row.id,
-  );
-  context.finishAttempt("action", row.id, row.token, "needs_attention", error);
-  context.audit("action_needs_attention", { id: row.id, error });
+  )
+  context.finishAttempt('action', row.id, row.token, 'needs_attention', error)
+  context.audit('action_needs_attention', { id: row.id, error })
 }
 
 export function failAction(context: StorageContext, action: ActionJob, error: AppError): void {
@@ -726,27 +725,27 @@ export function failAction(context: StorageContext, action: ActionJob, error: Ap
 `,
     action.id,
     action.token,
-  );
+  )
   if (!row) {
-    return;
+    return
   }
   const uncertainSend =
-    row.state === "sending" && error.category !== "permanent" && error.category !== "invalid";
+    row.state === 'sending' && error.category !== 'permanent' && error.category !== 'invalid'
   let state: ActionState =
-    error.category === "permanent" || error.category === "invalid" ? "blocked" : "retry";
+    error.category === 'permanent' || error.category === 'invalid' ? 'blocked' : 'retry'
   if (
-    (row.kind === "ban" || row.kind === "unban") &&
-    (uncertainSend || action.phase === "reconcile")
+    (row.kind === 'ban' || row.kind === 'unban') &&
+    (uncertainSend || action.phase === 'reconcile')
   ) {
-    state = "unknown";
+    state = 'unknown'
   }
-  if (row.kind === "notify" && (uncertainSend || action.phase === "reconcile")) {
-    state = "needs_attention";
+  if (row.kind === 'notify' && (uncertainSend || action.phase === 'reconcile')) {
+    state = 'needs_attention'
   }
   const delay =
-    state === "blocked"
+    state === 'blocked'
       ? context.settings.recoveryIntervalMs
-      : context.delay(row.attempt, context.settings.maxActionAttempts);
+      : context.delay(row.attempt, context.settings.maxActionAttempts)
   context.run(
     `
   UPDATE actions
@@ -757,7 +756,7 @@ export function failAction(context: StorageContext, action: ActionJob, error: Ap
     error.message,
     context.now() + Math.max(delay, error.retryAfterMs ?? 0),
     row.id,
-  );
-  context.finishAttempt("action", row.id, action.token, state, error.message);
-  context.audit("action_failed", { id: row.id, attempt: row.attempt, state, error: error.message });
+  )
+  context.finishAttempt('action', row.id, action.token, state, error.message)
+  context.audit('action_failed', { id: row.id, attempt: row.attempt, state, error: error.message })
 }

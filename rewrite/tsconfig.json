@@ -9,7 +9,19 @@
     "types": ["bun"],
     "allowImportingTsExtensions": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnosticSeverity": {
+          "effectSucceedWithVoid": "error",
+          "unnecessaryFailYieldableError": "error"
+        }
+      }
+    ]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
 }

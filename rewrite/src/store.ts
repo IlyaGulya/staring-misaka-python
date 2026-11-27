@@ -14,65 +14,65 @@ import {
   type Settings,
   type StoreHealth,
   type UsageSummary,
-} from "./domain";
-import { StorageContext } from "./storage/context";
-import { recoverInterruptedWork } from "./storage/recovery";
-import { ingestObservation } from "./storage/ingestion";
-import * as classification from "./storage/classification";
-import * as actions from "./storage/actions";
-import * as administration from "./storage/administration";
-import * as queries from "./storage/queries";
-import * as budget from "./storage/budget";
-import * as incidents from "./storage/incidents";
-import { runRetention, type RetentionReport } from "./storage/retention";
-import { exportJournal } from "./storage/journal";
-import { importLegacy } from "./storage/legacy";
+} from './domain'
+import { StorageContext } from './storage/context'
+import { recoverInterruptedWork } from './storage/recovery'
+import { ingestObservation } from './storage/ingestion'
+import * as classification from './storage/classification'
+import * as actions from './storage/actions'
+import * as administration from './storage/administration'
+import * as queries from './storage/queries'
+import * as budget from './storage/budget'
+import * as incidents from './storage/incidents'
+import { runRetention, type RetentionReport } from './storage/retention'
+import { exportJournal } from './storage/journal'
+import { importLegacy } from './storage/legacy'
 
 /** Application entrypoint: synchronous immediate transactions own every state transition.
  * Workflow modules share this connection, but cannot independently commit a partial batch.
  */
 export class Store {
-  private readonly context: StorageContext;
+  private readonly context: StorageContext
 
   constructor(
     readonly settings: Settings,
     now: () => number = Date.now,
   ) {
-    this.context = new StorageContext(settings, now);
-    this.context.atomic(() => recoverInterruptedWork(this.context));
+    this.context = new StorageContext(settings, now)
+    this.context.atomic(() => recoverInterruptedWork(this.context))
   }
 
   close(): void {
-    this.context.db.close();
+    this.context.db.close()
   }
 
   ping(): boolean {
     try {
-      return this.context.get<{ ok: number }>("SELECT 1 AS ok")?.ok === 1;
+      return this.context.get<{ ok: number }>('SELECT 1 AS ok')?.ok === 1
     } catch {
-      return false;
+      return false
     }
   }
 
   bindBot(botId: number, botUsername?: string): void {
-    const context = this.context;
+    const context = this.context
     context.atomic(() => {
       const existing = context.get<{ value: string }>(`
         SELECT value FROM meta WHERE key = 'botId'
-      `)?.value;
+      `)?.value
       if (existing !== undefined && Number(existing) !== botId) {
         throw new AppError({
-          category: "invalid",
-          message: "Database belongs to another Telegram bot",
-        });
+          category: 'invalid',
+          message: 'Database belongs to another Telegram bot',
+        })
       }
       context.run(
         `
         INSERT OR IGNORE INTO meta(key, value) VALUES('botId', ?)
       `,
         String(botId),
-      );
-      context.botId = botId;
+      )
+      context.botId = botId
       if (botUsername !== undefined) {
         context.run(
           `
@@ -80,46 +80,46 @@ export class Store {
           ON CONFLICT(key) DO UPDATE SET value = excluded.value
         `,
           botUsername,
-        );
+        )
       }
       context.botUsername =
         botUsername ??
         context.get<{ value: string }>(`
         SELECT value FROM meta WHERE key = 'botUsername'
       `)?.value ??
-        "";
-    });
+        ''
+    })
   }
 
   canonicalChatId(chatId: number): number {
-    return this.context.canonicalChatId(chatId);
+    return this.context.canonicalChatId(chatId)
   }
 
   resolveChatId(chatId: number): number {
-    return this.context.resolveChatId(chatId);
+    return this.context.resolveChatId(chatId)
   }
 
   tracksChat(chatId: number): boolean {
-    return this.context.tracksChat(chatId);
+    return this.context.tracksChat(chatId)
   }
 
   ingest(observation: Observation): boolean {
-    return this.context.atomic(() => ingestObservation(this.context, observation));
+    return this.context.atomic(() => ingestObservation(this.context, observation))
   }
 
   getOffset(): number {
-    return queries.getOffset(this.context);
+    return queries.getOffset(this.context)
   }
 
   /** Evidence, durable commands and accepted poll offset are one indivisible commit. */
   acceptBatch(observations: Observation[], nextOffset: number, commands: Command[] = []): void {
-    const context = this.context;
+    const context = this.context
     context.atomic(() => {
       for (const observation of observations) {
-        ingestObservation(context, observation);
+        ingestObservation(context, observation)
       }
       for (const command of commands) {
-        administration.enqueueCommand(context, command);
+        administration.enqueueCommand(context, command)
       }
       context.run(
         `
@@ -129,182 +129,182 @@ export class Store {
         )
       `,
         String(nextOffset),
-      );
-    });
+      )
+    })
   }
 
   enqueueCommand(command: Command): void {
-    this.context.atomic(() => administration.enqueueCommand(this.context, command));
+    this.context.atomic(() => administration.enqueueCommand(this.context, command))
   }
 
   claimCommand(): Command | undefined {
-    return this.context.atomic(() => administration.claimCommand(this.context));
+    return this.context.atomic(() => administration.claimCommand(this.context))
   }
 
   applyCommand<T>(id: string, mutation: () => T): T | undefined {
-    return this.context.atomic(() => administration.applyCommand(this.context, id, mutation));
+    return this.context.atomic(() => administration.applyCommand(this.context, id, mutation))
   }
 
   finishCommand(id: string): void {
-    administration.finishCommand(this.context, id);
+    administration.finishCommand(this.context, id)
   }
 
   failCommand(id: string, error: string): void {
-    this.context.atomic(() => administration.failCommand(this.context, id, error));
+    this.context.atomic(() => administration.failCommand(this.context, id, error))
   }
 
   getDecision(id: string): Decision | undefined {
-    return queries.getDecision(this.context, id);
+    return queries.getDecision(this.context, id)
   }
 
   decisionsFor(userId: number): Decision[] {
-    return queries.decisionsFor(this.context, userId);
+    return queries.decisionsFor(this.context, userId)
   }
 
   recentDecisions(limit = 10, chatId?: number): RecentDecision[] {
-    return queries.recentDecisions(this.context, limit, chatId);
+    return queries.recentDecisions(this.context, limit, chatId)
   }
 
   resolveUsername(chatId: number, username: string): number[] {
-    return queries.resolveUsername(this.context, chatId, username);
+    return queries.resolveUsername(this.context, chatId, username)
   }
 
   decisionForMessage(chatId: number, messageId: number): Decision | undefined {
-    return queries.decisionForMessage(this.context, chatId, messageId);
+    return queries.decisionForMessage(this.context, chatId, messageId)
   }
 
   approve(chatId: number, userId: number, actorId: number): void {
-    this.context.atomic(() => administration.approve(this.context, chatId, userId, actorId));
+    this.context.atomic(() => administration.approve(this.context, chatId, userId, actorId))
   }
 
   unapprove(chatId: number, userId: number, actorId: number): void {
-    this.context.atomic(() => administration.unapprove(this.context, chatId, userId, actorId));
+    this.context.atomic(() => administration.unapprove(this.context, chatId, userId, actorId))
   }
 
   chatEnabled(chatId: number): boolean {
-    return queries.chatEnabled(this.context, chatId);
+    return queries.chatEnabled(this.context, chatId)
   }
 
   chatSummaries() {
-    return queries.chatSummaries(this.context);
+    return queries.chatSummaries(this.context)
   }
 
   toggleChat(chatId: number, enabled?: boolean): boolean {
-    return this.context.atomic(() => administration.toggleChat(this.context, chatId, enabled));
+    return this.context.atomic(() => administration.toggleChat(this.context, chatId, enabled))
   }
 
   override(decisionId: string, actorId: number): void {
-    this.context.atomic(() => actions.overrideDecision(this.context, decisionId, actorId));
+    this.context.atomic(() => actions.overrideDecision(this.context, decisionId, actorId))
   }
 
   claimClassification(): ClassificationJob | undefined {
-    return this.context.atomic(() => classification.claimClassification(this.context));
+    return this.context.atomic(() => classification.claimClassification(this.context))
   }
 
   completeClassification(job: ClassificationJob, result: Classification): boolean {
     return this.context.atomic(() =>
       classification.completeClassification(this.context, job, result),
-    );
+    )
   }
 
   failClassification(job: ClassificationJob, error: AppError): void {
-    this.context.atomic(() => classification.failClassification(this.context, job, error));
+    this.context.atomic(() => classification.failClassification(this.context, job, error))
   }
 
   interruptClassification(job: ClassificationJob): void {
     this.failClassification(
       job,
-      new AppError({ category: "transient", message: "classification interrupted" }),
-    );
+      new AppError({ category: 'transient', message: 'classification interrupted' }),
+    )
   }
 
   claimAction(): ActionJob | undefined {
-    return this.context.atomic(() => actions.claimAction(this.context));
+    return this.context.atomic(() => actions.claimAction(this.context))
   }
 
   /** Called after the membership await, immediately before the mutating request. */
   prepareAction(action: ActionJob, membership?: Membership, targetChatId?: number): boolean {
     return this.context.atomic(() =>
       actions.prepareAction(this.context, action, membership, targetChatId),
-    );
+    )
   }
 
   completeAction(action: ActionJob, receipt?: number): void {
-    this.context.atomic(() => actions.completeAction(this.context, action, receipt));
+    this.context.atomic(() => actions.completeAction(this.context, action, receipt))
   }
 
   failAction(action: ActionJob, error: AppError): void {
-    this.context.atomic(() => actions.failAction(this.context, action, error));
+    this.context.atomic(() => actions.failAction(this.context, action, error))
   }
 
   interruptAction(action: ActionJob): void {
-    this.failAction(action, new AppError({ category: "unknown", message: "action interrupted" }));
+    this.failAction(action, new AppError({ category: 'unknown', message: 'action interrupted' }))
   }
 
   todayUsage(chatId?: number): UsageSummary {
-    return budget.getTodayUsage(this.context, chatId);
+    return budget.getTodayUsage(this.context, chatId)
   }
 
   isBudgetExceeded(): boolean {
-    return budget.isDailyBudgetExceeded(this.context);
+    return budget.isDailyBudgetExceeded(this.context)
   }
 
   recordIncident(key: string, active: boolean, details: string) {
     return this.context.atomic(() =>
       incidents.recordIncidentState(this.context, key, active, details),
-    );
+    )
   }
 
   openIncidents(): IncidentAlert[] {
-    return incidents.listOpenIncidents(this.context);
+    return incidents.listOpenIncidents(this.context)
   }
 
   blockedAuthJobs(): number {
-    return queries.blockedAuthJobs(this.context);
+    return queries.blockedAuthJobs(this.context)
   }
 
   needsAttentionActions() {
-    return queries.needsAttentionActions(this.context);
+    return queries.needsAttentionActions(this.context)
   }
 
   claimAdminBanNotice(): AdminBanNotice | undefined {
-    return this.context.atomic(() => incidents.claimAdminBanNotice(this.context));
+    return this.context.atomic(() => incidents.claimAdminBanNotice(this.context))
   }
 
   completeAdminBanNotice(decisionId: string, sentMessageId?: number): void {
     this.context.atomic(() =>
       incidents.completeAdminBanNotice(this.context, decisionId, sentMessageId),
-    );
+    )
   }
 
   failAdminBanNotice(decisionId: string, error: string, permanent: boolean): void {
     this.context.atomic(() =>
       incidents.failAdminBanNotice(this.context, decisionId, error, permanent),
-    );
+    )
   }
 
   runRetention(): RetentionReport {
-    return this.context.atomic(() => runRetention(this.context));
+    return this.context.atomic(() => runRetention(this.context))
   }
 
   status(chatId?: number): Record<string, number> {
-    return queries.status(this.context, chatId);
+    return queries.status(this.context, chatId)
   }
 
   action(id: string): ActionDetail | undefined {
-    return queries.action(this.context, id);
+    return queries.action(this.context, id)
   }
 
   health(): StoreHealth {
-    return queries.health(this.context);
+    return queries.health(this.context)
   }
 
   exportJournal(): number {
-    return exportJournal(this.context);
+    return exportJournal(this.context)
   }
 
   /** The importer owns the source read transaction and nests this connection's write transaction. */
   importLegacy(path: string): Record<string, number> {
-    return importLegacy(this.context, path);
+    return importLegacy(this.context, path)
   }
 }

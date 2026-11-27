@@ -7,9 +7,13 @@
   },
   "scripts": {
     "start": "bun run src/main.ts",
-    "check": "tsc --noEmit",
-    "format": "prettier --write src tests scripts package.json tsconfig.json .prettierrc.json",
-    "format:check": "prettier --check src tests scripts package.json tsconfig.json .prettierrc.json",
+    "check": "bun run --bun tsc --noEmit",
+    "lint": "bun run lint:oxlint && bun run lint:effect && bun run lint:arch",
+    "lint:oxlint": "bun run --bun oxlint --type-aware src tests scripts",
+    "lint:effect": "bun run --bun effect-language-service diagnostics --project tsconfig.json --strict --format text",
+    "lint:arch": "bun run --bun depcruise --config .dependency-cruiser.cjs src",
+    "format": "bun run --bun oxfmt --write src tests scripts package.json tsconfig.json .oxlintrc.json .oxfmtrc.json .dependency-cruiser.cjs",
+    "format:check": "bun run --bun oxfmt --check src tests scripts package.json tsconfig.json .oxlintrc.json .oxfmtrc.json .dependency-cruiser.cjs",
     "test": "bun test",
     "smoke:image": "bash scripts/smoke-image.sh",
     "import": "bun run src/import.ts",
@@ -23,8 +27,12 @@
     "telegram": "2.26.22"
   },
   "devDependencies": {
+    "@effect/language-service": "0.87.5",
     "@types/bun": "1.3.11",
-    "prettier": "3.9.10",
+    "dependency-cruiser": "18.9.0",
+    "oxfmt": "0.80.0",
+    "oxlint": "1.95.0",
+    "oxlint-tsgolint": "7.0.2009",
     "typescript": "5.9.3"
   }
 }

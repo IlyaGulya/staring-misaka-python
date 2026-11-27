@@ -1,17 +1,17 @@
-import { Schema } from "effect";
+import { Schema } from 'effect'
 
-export const encode = (value: unknown): string => JSON.stringify(value);
-export const ObjectSchema = Schema.Record(Schema.String, Schema.Unknown);
+export const encode = (value: unknown): string => JSON.stringify(value)
+export const ObjectSchema = Schema.Record(Schema.String, Schema.Unknown)
 
 export const MediaSchema = Schema.Array(
   Schema.Struct({
-    kind: Schema.Literals(["photo", "document", "video", "unsupported"]),
+    kind: Schema.Literals(['photo', 'document', 'video', 'unsupported']),
     fileId: Schema.optional(Schema.String),
     blobHash: Schema.optional(Schema.String),
     mimeType: Schema.optional(Schema.String),
     size: Schema.optional(Schema.Number),
   }),
-);
+)
 
 export const ContextMessageSchema = Schema.Struct({
   messageId: Schema.Number,
@@ -21,7 +21,7 @@ export const ContextMessageSchema = Schema.Struct({
   sender: Schema.optional(Schema.String),
   occurredAt: Schema.Number,
   text: Schema.String,
-});
+})
 
 export const SnapshotSchema = Schema.Struct({
   id: Schema.String,
@@ -40,16 +40,16 @@ export const SnapshotSchema = Schema.Struct({
   ),
   context: Schema.optional(Schema.Array(ContextMessageSchema)),
   contextTruncated: Schema.optional(Schema.Boolean),
-});
+})
 
 export const ClassificationSchema = Schema.Struct({
-  verdict: Schema.Literals(["spam", "clean", "uncertain"]),
+  verdict: Schema.Literals(['spam', 'clean', 'uncertain']),
   reason: Schema.String,
   evidenceMessageIds: Schema.Array(Schema.Number),
   model: Schema.String,
   promptVersion: Schema.String,
   usage: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
-});
+})
 
 export const CommandSchema = Schema.Struct({
   id: Schema.String,
@@ -60,7 +60,7 @@ export const CommandSchema = Schema.Struct({
   replyToMessageId: Schema.optional(Schema.Number),
   replyToUserId: Schema.optional(Schema.Number),
   callbackId: Schema.optional(Schema.String),
-});
+})
 
 export const ActionPayloadSchema = Schema.Struct({
   reason: Schema.optional(Schema.String),
@@ -71,8 +71,8 @@ export const ActionPayloadSchema = Schema.Struct({
   receipt: Schema.optional(Schema.Number),
   followupCreatedAt: Schema.optional(Schema.Number),
   banActionId: Schema.optional(Schema.String),
-});
+})
 
 export function decode<T>(value: string, schema: Schema.Codec<T>): T {
-  return Schema.decodeUnknownSync(schema)(JSON.parse(value));
+  return Schema.decodeUnknownSync(schema)(JSON.parse(value))
 }

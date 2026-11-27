@@ -30,7 +30,11 @@
 
 `Store` владеет транзакциями; внутренние storage workflows не коммитят отдельные куски принятого batch. Сеть остаётся снаружи SQLite-транзакций. Общего типа «строка любой таблицы» нет: SQL-проекции описаны отдельно, JSON декодируется на границе. Схема SQLite v1 и формат сохранённых решений сохранены; изменения LLM-протокола имеют отдельную версию промпта.
 
-Стиль закреплён Prettier в `.prettierrc.json`: `bun run format` форматирует TypeScript и конфиги, `bun run format:check` проверяет их без изменений.
+Oxfmt использует правила из `.oxfmtrc.json`, согласованные с `misaka.network`. Команда `bun run format` форматирует TypeScript и конфиги, а `bun run format:check` проверяет форматирование.
+
+`bun run lint` запускает type-aware Oxlint, диагностику Effect и dependency-cruiser. Первые две проверки охватывают `src`, `tests` и `scripts`. Dependency-cruiser проверяет границы слоёв, циклы, разрешимость импортов и достижимость модулей `src` из `main.ts`, `import.ts` или `observer-login.ts`, включая импорты типов.
+
+В Oxlint для `no-underscore-dangle` разрешён дискриминатор Effect `_tag`. Правило `typescript/no-unsafe-class-instance-assignment` отключено из-за ложных срабатываний на совместимых типах `AbortSignal` из Bun и grammY.
 
 `ClassifierPort.classify(snapshot)` возвращает `Effect<Classification, AppError>`. Provider layer создаётся один раз на приложение; `Engine` владеет общим deadline и durable retries. SDK не получает retry-план или handlers инструментов. Для Sonnet 4.5 используется native JSON Schema output; для моделей без него формат reporting tool выбирает SDK, не наш ручной декодер. Протокол отмечен `misaka-evidence-v2`; из safety prompt убрана устаревшая инструкция об обязательном tool call. YAML-политика и выбранная модель не менялись.
 
@@ -127,7 +131,7 @@ docker compose up -d
 
 ### CI и отдельный образ
 
-`.github/workflows/rewrite.yml` запускается на PR, push в `master` при изменении `rewrite/**` или самого workflow, push тега `bun-*`, а также вручную. Сначала Bun 1.4.2 устанавливает frozen dependencies без lifecycle scripts, затем выполняются форматирование, TypeScript и тесты. После этого отдельные native runners собирают и проверяют `linux/amd64` и `linux/arm64`; эмуляция в CI не нужна.
+`.github/workflows/rewrite.yml` запускается на PR, push в `master` при изменении `rewrite/**` или самого workflow, push тега `bun-*`, а также вручную. Bun 1.4.2 устанавливает frozen dependencies без lifecycle scripts, затем CI проверяет форматирование, типы, линтеры и тесты. После этого отдельные native runners собирают и проверяют образы `linux/amd64` и `linux/arm64`.
 
 Push в `master` или явный release tag `bun-*` исходного, не fork-репозитория разрешает публикацию в `ghcr.io/<owner>/<repo>-bun`. Два проверенных образа передаются publisher через artifacts, без повторной сборки. После успешных проверок обеих архитектур создаются `sha-<полный commit SHA>-amd64`, `sha-<полный commit SHA>-arm64` и общий multiarch tag `sha-<полный commit SHA>`. Теги `latest`/`master` нового образа не создаются; старый image workflow и его имя не меняются. Registry write token доступен только publisher. PR и `workflow_dispatch` ничего не публикуют.
 
@@ -171,6 +175,7 @@ Production работает в K3s на `misaka`, namespace `staring-misaka`; Co
 ```sh
 bun run format:check
 bun run check
+bun run lint
 bun test
 ```
 

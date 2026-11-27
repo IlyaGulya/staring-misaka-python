@@ -1,19 +1,19 @@
-import { randomUUID } from "node:crypto";
-import { Schema } from "effect";
+import { randomUUID } from 'node:crypto'
+import { Schema } from 'effect'
 import {
   AppError,
   type Classification,
   type ClassificationJob,
   type ContextMessage,
   type Snapshot,
-} from "../domain";
-import { StorageContext } from "./context";
+} from '../domain'
+import { StorageContext } from './context'
 import type {
   SubjectRecord,
   RevisionRecord,
   ClassificationRecord,
   ClassificationSnapshotRecord,
-} from "./records";
+} from './records'
 import {
   encode,
   decode,
@@ -21,41 +21,45 @@ import {
   MediaSchema,
   SnapshotSchema,
   ClassificationSchema,
-} from "./codecs";
-import { addAction } from "./actions";
-import { isDailyBudgetExceeded, recordUsage } from "./budget";
-import { assessRevisionRisk, isSubstantiveMessage } from "./reputation";
+} from './codecs'
+import { addAction } from './actions'
+import { isDailyBudgetExceeded, recordUsage } from './budget'
+import { assessRevisionRisk, isSubstantiveMessage } from './reputation'
 
-const CONTEXT_MAX_MESSAGES = 10;
-const CONTEXT_MAX_CHARS = 8_000;
-const CONTEXT_MESSAGE_MAX_CHARS = 1_000;
-const CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const CONTEXT_SAME_AUTHOR_RESERVE = 3;
-const BURST_WINDOW_MS = 30_000;
+const CONTEXT_MAX_MESSAGES = 10
+const CONTEXT_MAX_CHARS = 8_000
+const CONTEXT_MESSAGE_MAX_CHARS = 1_000
+const CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000
+const CONTEXT_SAME_AUTHOR_RESERVE = 3
+const BURST_WINDOW_MS = 30_000
 
 interface PriorContextRow {
-  seq: number;
-  messageId: number;
-  userId: number | null;
-  text: string;
-  metadata: string;
-  stamp: number;
+  seq: number
+  messageId: number
+  userId: number | null
+  text: string
+  metadata: string
+  stamp: number
 }
 
 function senderLabel(metadata: Record<string, unknown>, userId: number | null): string | undefined {
-  const sender = metadata.sender;
-  if (sender && typeof sender === "object") {
-    const record = sender as Record<string, unknown>;
+  const sender = metadata.sender
+  if (sender && typeof sender === 'object') {
     const username =
-      typeof record.username === "string" && record.username ? `@${record.username}` : "";
-    const name = [record.firstName, record.lastName]
-      .filter((part): part is string => typeof part === "string" && part.length > 0)
-      .join(" ");
-    if (name && username) return `${name} (${username})`;
-    if (name) return name;
-    if (username) return username;
+      'username' in sender && typeof sender.username === 'string' && sender.username
+        ? `@${sender.username}`
+        : ''
+    const name = [
+      'firstName' in sender ? sender.firstName : undefined,
+      'lastName' in sender ? sender.lastName : undefined,
+    ]
+      .filter((part): part is string => typeof part === 'string' && part.length > 0)
+      .join(' ')
+    if (name && username) return `${name} (${username})`
+    if (name) return name
+    if (username) return username
   }
-  return userId !== null ? `user:${userId}` : undefined;
+  return userId !== null ? `user:${userId}` : undefined
 }
 
 /** Collect strictly causal, past-only chat context (reply parent + same-author + recent chat). */
@@ -68,7 +72,7 @@ function buildCausalContext(
   replyParentIds: ReadonlySet<number>,
   targetMinStamp: number,
 ): { readonly context: ContextMessage[]; readonly truncated: boolean } {
-  const recentWindowStart = Math.max(0, targetMinStamp - CONTEXT_WINDOW_MS);
+  const recentWindowStart = Math.max(0, targetMinStamp - CONTEXT_WINDOW_MS)
   const candidates = context.all<PriorContextRow>(
     `
     SELECT r.seq, r.messageId, r.userId, r.text, r.metadata, m.stamp
@@ -85,73 +89,73 @@ function buildCausalContext(
     firstTargetSeq,
     recentWindowStart,
     JSON.stringify([...replyParentIds]),
-  );
+  )
 
   // Exclude target messages themselves and keep only the latest revision per prior messageId.
-  const seen = new Set<number>(targetMessageIds);
-  const unique: PriorContextRow[] = [];
+  const seen = new Set<number>(targetMessageIds)
+  const unique: PriorContextRow[] = []
   for (const row of candidates) {
-    if (seen.has(row.messageId)) continue;
-    seen.add(row.messageId);
-    unique.push(row);
+    if (seen.has(row.messageId)) continue
+    seen.add(row.messageId)
+    unique.push(row)
   }
-  if (unique.length === 0) return { context: [], truncated: false };
+  if (unique.length === 0) return { context: [], truncated: false }
 
-  const replyRows: PriorContextRow[] = [];
-  const sameAuthorRows: PriorContextRow[] = [];
-  const otherRows: PriorContextRow[] = [];
+  const replyRows: PriorContextRow[] = []
+  const sameAuthorRows: PriorContextRow[] = []
+  const otherRows: PriorContextRow[] = []
   for (const row of unique) {
     if (replyParentIds.has(row.messageId)) {
-      replyRows.push(row);
+      replyRows.push(row)
     } else if (row.userId === subjectUserId) {
-      sameAuthorRows.push(row);
+      sameAuthorRows.push(row)
     } else {
-      otherRows.push(row);
+      otherRows.push(row)
     }
   }
 
-  const picked: PriorContextRow[] = [];
-  const pickedIds = new Set<number>();
+  const picked: PriorContextRow[] = []
+  const pickedIds = new Set<number>()
   const add = (row: PriorContextRow): void => {
-    if (picked.length >= CONTEXT_MAX_MESSAGES || pickedIds.has(row.messageId)) return;
-    picked.push(row);
-    pickedIds.add(row.messageId);
-  };
+    if (picked.length >= CONTEXT_MAX_MESSAGES || pickedIds.has(row.messageId)) return
+    picked.push(row)
+    pickedIds.add(row.messageId)
+  }
 
-  for (const row of replyRows) add(row);
-  for (const row of sameAuthorRows.slice(0, CONTEXT_SAME_AUTHOR_RESERVE)) add(row);
+  for (const row of replyRows) add(row)
+  for (const row of sameAuthorRows.slice(0, CONTEXT_SAME_AUTHOR_RESERVE)) add(row)
   // Fill remaining slots with newest surrounding messages (both same-author and other chat users).
-  for (const row of unique) add(row);
+  for (const row of unique) add(row)
 
-  let truncated = unique.length > picked.length;
+  let truncated = unique.length > picked.length
   // Enforce char budget, reserving reply parents first.
-  const budgeted: PriorContextRow[] = [];
-  let remainingChars = CONTEXT_MAX_CHARS;
+  const budgeted: PriorContextRow[] = []
+  let remainingChars = CONTEXT_MAX_CHARS
   const prioritized = [
     ...picked.filter((row) => replyParentIds.has(row.messageId)),
     ...picked.filter((row) => !replyParentIds.has(row.messageId)),
-  ];
+  ]
   for (const row of prioritized) {
-    const clippedLength = Math.min(row.text.length, CONTEXT_MESSAGE_MAX_CHARS);
+    const clippedLength = Math.min(row.text.length, CONTEXT_MESSAGE_MAX_CHARS)
     if (clippedLength > remainingChars) {
-      truncated = true;
-      continue;
+      truncated = true
+      continue
     }
-    remainingChars -= clippedLength;
-    budgeted.push(row);
+    remainingChars -= clippedLength
+    budgeted.push(row)
   }
 
-  budgeted.sort((a, b) => a.seq - b.seq);
+  budgeted.sort((a, b) => a.seq - b.seq)
   const messages: ContextMessage[] = budgeted.map((row) => {
-    let parsedMeta: Record<string, unknown> = {};
+    let parsedMeta: Record<string, unknown> = {}
     try {
-      parsedMeta = decode(row.metadata, ObjectSchema);
+      parsedMeta = decode(row.metadata, ObjectSchema)
     } catch {
-      parsedMeta = {};
+      parsedMeta = {}
     }
-    const text = row.text.slice(0, CONTEXT_MESSAGE_MAX_CHARS);
-    if (text.length < row.text.length) truncated = true;
-    const sender = senderLabel(parsedMeta, row.userId);
+    const text = row.text.slice(0, CONTEXT_MESSAGE_MAX_CHARS)
+    if (text.length < row.text.length) truncated = true
+    const sender = senderLabel(parsedMeta, row.userId)
     return {
       messageId: row.messageId,
       ...(row.userId === null ? {} : { userId: row.userId }),
@@ -160,14 +164,14 @@ function buildCausalContext(
       ...(sender ? { sender } : {}),
       occurredAt: row.stamp,
       text,
-    };
-  });
-  return { context: messages, truncated };
+    }
+  })
+  return { context: messages, truncated }
 }
 
 export function claimClassification(context: StorageContext): ClassificationJob | undefined {
   if (isDailyBudgetExceeded(context)) {
-    return undefined;
+    return undefined
   }
 
   let row = context.get<ClassificationSnapshotRecord>(
@@ -183,11 +187,11 @@ export function claimClassification(context: StorageContext): ClassificationJob 
   LIMIT 1
 `,
     context.now(),
-  );
+  )
 
   if (!row) {
-    const threshold = context.settings.reputationThreshold ?? 0;
-    const excluded = new Set<string>();
+    const threshold = context.settings.reputationThreshold ?? 0
+    const excluded = new Set<string>()
 
     while (!row) {
       const subject = context.get<SubjectRecord>(
@@ -214,17 +218,17 @@ export function claimClassification(context: StorageContext): ClassificationJob 
             ORDER BY u.lastCleanAt ASC, u.rowid ASC
             LIMIT 1
         `,
-      );
+      )
       if (!subject) {
-        return undefined;
+        return undefined
       }
-      const subjectKey = `${subject.chatId}:${subject.userId}`;
+      const subjectKey = `${subject.chatId}:${subject.userId}`
       if (excluded.has(subjectKey)) {
-        return undefined;
+        return undefined
       }
-      excluded.add(subjectKey);
+      excluded.add(subjectKey)
 
-      const resolvedChatId = context.resolveChatId(subject.chatId);
+      const resolvedChatId = context.resolveChatId(subject.chatId)
       const rows = context.all<RevisionRecord>(
         `
   SELECT r.*
@@ -240,11 +244,11 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         resolvedChatId,
         subject.userId,
         subject.processedSeq,
-      );
-      const mode = rows[0]!.mode;
-      const boundary = rows.findIndex((revision) => revision.mode !== mode);
+      )
+      const mode = rows[0]!.mode
+      const boundary = rows.findIndex((revision) => revision.mode !== mode)
       if (boundary >= 0) {
-        rows.length = boundary;
+        rows.length = boundary
       }
 
       // Soft reputation gate: established regulars skip LLM only on plain, unedited, non-burst text.
@@ -258,7 +262,7 @@ export function claimClassification(context: StorageContext): ClassificationJob 
           `,
             resolvedChatId,
             subject.userId,
-          )?.stamp ?? context.now();
+          )?.stamp ?? context.now()
         const recentBurstCount =
           context.get<{ n: number }>(
             `
@@ -269,19 +273,19 @@ export function claimClassification(context: StorageContext): ClassificationJob 
             resolvedChatId,
             subject.userId,
             latestStamp - BURST_WINDOW_MS,
-          )?.n ?? rows.length;
+          )?.n ?? rows.length
 
         const riskyRevision = rows.some((revision) => {
-          const media = decode(revision.media, MediaSchema);
-          const metadata = decode(revision.metadata, ObjectSchema);
+          const media = decode(revision.media, MediaSchema)
+          const metadata = decode(revision.metadata, ObjectSchema)
           return assessRevisionRisk(
             { revision: revision.revision, text: revision.text, media, metadata },
             recentBurstCount,
-          ).risky;
-        });
+          ).risky
+        })
 
         if (!riskyRevision) {
-          const highwater = rows[rows.length - 1]!.seq;
+          const highwater = rows[rows.length - 1]!.seq
           context.run(
             `
             UPDATE subjects
@@ -291,37 +295,37 @@ export function claimClassification(context: StorageContext): ClassificationJob 
             highwater,
             subject.chatId,
             subject.userId,
-          );
-          context.audit("classification_skipped_reputation", {
+          )
+          context.audit('classification_skipped_reputation', {
             chatId: subject.chatId,
             userId: subject.userId,
             cleanCount: subject.cleanCount,
             messageIds: rows.map((r) => r.messageId),
-          });
-          continue;
+          })
+          continue
         }
       }
 
-      let characters = 16_000;
-      let mediaLeft = 4;
-      const targetMessageIds = new Set<number>();
-      const replyParentIds = new Set<number>();
+      let characters = 16_000
+      let mediaLeft = 4
+      const targetMessageIds = new Set<number>()
+      const replyParentIds = new Set<number>()
       const messages = rows.map((revision) => {
-        targetMessageIds.add(revision.messageId);
-        const text = revision.text.slice(0, Math.min(4_000, characters));
-        characters -= text.length;
-        const originalMedia = decode(revision.media, MediaSchema);
-        const media = originalMedia.slice(0, mediaLeft);
-        mediaLeft -= media.length;
-        const rawMeta = decode(revision.metadata, ObjectSchema);
+        targetMessageIds.add(revision.messageId)
+        const text = revision.text.slice(0, Math.min(4_000, characters))
+        characters -= text.length
+        const originalMedia = decode(revision.media, MediaSchema)
+        const media = originalMedia.slice(0, mediaLeft)
+        mediaLeft -= media.length
+        const rawMeta = decode(revision.metadata, ObjectSchema)
         if (
-          typeof rawMeta.replyToMessageId === "number" &&
+          typeof rawMeta.replyToMessageId === 'number' &&
           Number.isSafeInteger(rawMeta.replyToMessageId) &&
           rawMeta.replyToMessageId > 0
         ) {
-          replyParentIds.add(rawMeta.replyToMessageId);
+          replyParentIds.add(rawMeta.replyToMessageId)
         }
-        const metadata = boundedMetadata(rawMeta);
+        const metadata = boundedMetadata(rawMeta)
         return {
           messageId: revision.messageId,
           revision: revision.revision,
@@ -335,8 +339,8 @@ export function claimClassification(context: StorageContext): ClassificationJob 
               text.length < revision.text.length ||
               media.length < originalMedia.length,
           },
-        };
-      });
+        }
+      })
 
       const targetMinStamp =
         context.get<{ stamp: number }>(
@@ -348,7 +352,7 @@ export function claimClassification(context: StorageContext): ClassificationJob 
           context.now(),
           resolvedChatId,
           JSON.stringify([...targetMessageIds]),
-        )?.stamp ?? context.now();
+        )?.stamp ?? context.now()
 
       const causal = buildCausalContext(
         context,
@@ -358,7 +362,7 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         targetMessageIds,
         replyParentIds,
         targetMinStamp,
-      );
+      )
 
       const snapshot: Snapshot = {
         id: randomUUID(),
@@ -369,7 +373,7 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         messages,
         ...(causal.context.length > 0 ? { context: causal.context } : {}),
         ...(causal.truncated ? { contextTruncated: true } : {}),
-      };
+      }
       context.run(
         `
   INSERT INTO snapshots(id,chatId,userId,highwater,payload,createdAt)
@@ -381,8 +385,8 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         rows[rows.length - 1]!.seq,
         encode(snapshot),
         context.now(),
-      );
-      const id = randomUUID();
+      )
+      const id = randomUUID()
       context.run(
         `
   INSERT INTO jobs(id,snapshotId,chatId,userId,state,mode,createdAt)
@@ -394,7 +398,7 @@ export function claimClassification(context: StorageContext): ClassificationJob 
         subject.userId,
         mode,
         context.now(),
-      );
+      )
       row = context.get<ClassificationSnapshotRecord>(
         `
   SELECT j.*,s.payload
@@ -403,12 +407,12 @@ export function claimClassification(context: StorageContext): ClassificationJob 
   WHERE j.id=?
 `,
         id,
-      )!;
-      context.audit("classification_scheduled", { id, snapshotId: snapshot.id });
+      )!
+      context.audit('classification_scheduled', { id, snapshotId: snapshot.id })
     }
   }
 
-  const token = randomUUID();
+  const token = randomUUID()
   context.run(
     `
   UPDATE jobs
@@ -417,14 +421,14 @@ export function claimClassification(context: StorageContext): ClassificationJob 
 `,
     token,
     row.id,
-  );
-  context.startAttempt("classification", row.id, row.attempt + 1, token);
+  )
+  context.startAttempt('classification', row.id, row.attempt + 1, token)
   return {
     id: row.id,
     token,
     attempt: row.attempt + 1,
     snapshot: decode(row.payload, SnapshotSchema),
-  };
+  }
 }
 
 export function completeClassification(
@@ -432,7 +436,7 @@ export function completeClassification(
   job: ClassificationJob,
   result: Classification,
 ): boolean {
-  result = Schema.decodeUnknownSync(ClassificationSchema)(result);
+  result = Schema.decodeUnknownSync(ClassificationSchema)(result)
   const current = context.get<ClassificationRecord>(
     `
   SELECT *
@@ -443,11 +447,11 @@ export function completeClassification(
 `,
     job.id,
     job.token,
-  );
+  )
   if (!current) {
-    return false;
+    return false
   }
-  const subject = context.subject(job.snapshot.chatId, job.snapshot.userId);
+  const subject = context.subject(job.snapshot.chatId, job.snapshot.userId)
   if (
     subject.version !== job.snapshot.version ||
     subject.generation !== job.snapshot.generation ||
@@ -461,30 +465,30 @@ export function completeClassification(
   WHERE id=?
 `,
       job.id,
-    );
-    context.finishAttempt("classification", job.id, job.token, "stale");
-    return false;
+    )
+    context.finishAttempt('classification', job.id, job.token, 'stale')
+    return false
   }
-  const validIds = new Set(job.snapshot.messages.map((message) => message.messageId));
+  const validIds = new Set(job.snapshot.messages.map((message) => message.messageId))
   if (
-    !["spam", "clean", "uncertain"].includes(result.verdict) ||
+    !['spam', 'clean', 'uncertain'].includes(result.verdict) ||
     !result.reason ||
     !result.model ||
     !result.promptVersion ||
     result.evidenceMessageIds.some((id) => !validIds.has(id))
   ) {
     throw new AppError({
-      category: "invalid",
-      message: "Classifier returned invalid evidence or verdict",
-    });
+      category: 'invalid',
+      message: 'Classifier returned invalid evidence or verdict',
+    })
   }
 
   // Record token spend whenever an external model call completed.
   if (result.usage && Object.keys(result.usage).length > 0) {
-    recordUsage(context, subject.chatId, result.usage);
+    recordUsage(context, subject.chatId, result.usage)
   }
 
-  const id = randomUUID();
+  const id = randomUUID()
   context.run(
     `
   INSERT INTO decisions(id,chatId,userId,snapshotId,payload,createdAt,status)
@@ -497,9 +501,9 @@ export function completeClassification(
     encode(result),
     context.now(),
     result.verdict,
-  );
+  )
   const highwater = context.get<{
-    highwater: number;
+    highwater: number
   }>(
     `
   SELECT highwater
@@ -507,12 +511,12 @@ export function completeClassification(
   WHERE id=?
 `,
     job.snapshot.id,
-  )!.highwater;
+  )!.highwater
 
-  const minChars = context.settings.reputationMinChars ?? 30;
+  const minChars = context.settings.reputationMinChars ?? 30
   const earnedReputation =
-    result.verdict === "clean" &&
-    job.snapshot.messages.some((message) => isSubstantiveMessage(message.text, minChars));
+    result.verdict === 'clean' &&
+    job.snapshot.messages.some((message) => isSubstantiveMessage(message.text, minChars))
 
   context.run(
     `
@@ -530,7 +534,7 @@ export function completeClassification(
     context.now(),
     subject.chatId,
     subject.userId,
-  );
+  )
   context.run(
     `
   UPDATE jobs
@@ -538,11 +542,11 @@ export function completeClassification(
   WHERE id=?
 `,
     job.id,
-  );
-  context.finishAttempt("classification", job.id, job.token, "confirmed");
-  if (result.verdict === "spam") {
-    const mode = context.settings.mode === "shadow" ? "shadow" : current.mode;
-    if (mode === "live" || context.settings.mode === "shadow") {
+  )
+  context.finishAttempt('classification', job.id, job.token, 'confirmed')
+  if (result.verdict === 'spam') {
+    const mode = context.settings.mode === 'shadow' ? 'shadow' : current.mode
+    if (mode === 'live' || context.settings.mode === 'shadow') {
       context.run(
         `
   UPDATE subjects
@@ -553,20 +557,20 @@ export function completeClassification(
         id,
         subject.chatId,
         subject.userId,
-      );
+      )
     }
     addAction(context, {
-      kind: "ban",
+      kind: 'ban',
       decisionId: id,
       subject: subject,
       payload: {},
       retryAt: 0,
       originatingMode: mode,
-    });
+    })
 
     // Scoped cleanup: delete cited evidence messages plus messages within the recent episode window.
     // Never wipe multi-year history if an established member hits a false positive.
-    const cleanupWindowMs = context.settings.banCleanupWindowMs ?? 86_400_000;
+    const cleanupWindowMs = context.settings.banCleanupWindowMs ?? 86_400_000
     const latestEvidenceStamp =
       context.get<{ stamp: number }>(
         `
@@ -579,13 +583,13 @@ export function completeClassification(
         subject.chatId,
         subject.userId,
         JSON.stringify([...validIds]),
-      )?.stamp ?? 0;
-    const episodeAnchor = latestEvidenceStamp > 0 ? latestEvidenceStamp : context.now();
-    const cleanupCutoff = episodeAnchor - cleanupWindowMs;
+      )?.stamp ?? 0
+    const episodeAnchor = latestEvidenceStamp > 0 ? latestEvidenceStamp : context.now()
+    const cleanupCutoff = episodeAnchor - cleanupWindowMs
 
     for (const message of context.all<{
-      chatId: number;
-      messageId: number;
+      chatId: number
+      messageId: number
     }>(
       `
   SELECT chatId,messageId
@@ -606,19 +610,19 @@ export function completeClassification(
       JSON.stringify(result.evidenceMessageIds),
     )) {
       addAction(context, {
-        kind: "delete",
+        kind: 'delete',
         decisionId: id,
         subject: subject,
         messageId: message.messageId ?? undefined,
-        payload: { reason: "spam_cleanup", messageChatId: message.chatId },
-      });
+        payload: { reason: 'spam_cleanup', messageChatId: message.chatId },
+      })
     }
     addAction(context, {
-      kind: "notify",
+      kind: 'notify',
       decisionId: id,
       subject: subject,
       payload: { reason: result.reason.slice(0, 500) },
-    });
+    })
     if (context.settings.adminBanNotifications !== false) {
       context.run(
         `
@@ -627,11 +631,11 @@ export function completeClassification(
 `,
         id,
         context.now(),
-      );
+      )
     }
   }
-  context.audit("decision", { id, snapshotId: job.snapshot.id, ...result });
-  return true;
+  context.audit('decision', { id, snapshotId: job.snapshot.id, ...result })
+  return true
 }
 
 export function failClassification(
@@ -639,12 +643,11 @@ export function failClassification(
   job: ClassificationJob,
   error: AppError,
 ): void {
-  const state =
-    error.category === "permanent" || error.category === "invalid" ? "blocked" : "retry";
+  const state = error.category === 'permanent' || error.category === 'invalid' ? 'blocked' : 'retry'
   const delay =
-    state === "blocked"
+    state === 'blocked'
       ? context.settings.recoveryIntervalMs
-      : context.delay(job.attempt, context.settings.maxClassificationAttempts);
+      : context.delay(job.attempt, context.settings.maxClassificationAttempts)
   if (
     context.run(
       `
@@ -661,46 +664,44 @@ export function failClassification(
       job.token,
     )
   ) {
-    context.finishAttempt("classification", job.id, job.token, state, error.message);
-    context.audit("classification_failed", {
+    context.finishAttempt('classification', job.id, job.token, state, error.message)
+    context.audit('classification_failed', {
       id: job.id,
       attempt: job.attempt,
       state,
       error: error.message,
-    });
+    })
   }
 }
 
 /** Bound classifier context without changing the archived full-fidelity observation. */
 function boundedMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
-  let remaining = 8000;
+  let remaining = 8000
   function bound(value: unknown, depth: number): unknown {
     if (remaining <= 0 || depth > 5) {
-      return null;
+      return null
     }
-    if (typeof value === "string") {
-      const text = value.slice(0, Math.min(remaining, 2000));
-      remaining -= text.length;
-      return text;
+    if (typeof value === 'string') {
+      const text = value.slice(0, Math.min(remaining, 2000))
+      remaining -= text.length
+      return text
     }
     if (Array.isArray(value)) {
-      return value.slice(0, 32).map((item) => bound(item, depth + 1));
+      return value.slice(0, 32).map((item) => bound(item, depth + 1))
     }
-    if (value && typeof value === "object") {
-      const result: Record<string, unknown> = {};
+    if (value && typeof value === 'object') {
+      const result: Record<string, unknown> = {}
       for (const [key, child] of Object.entries(value).slice(0, 32)) {
-        remaining -= key.length;
-        result[key] = bound(child, depth + 1);
+        remaining -= key.length
+        result[key] = bound(child, depth + 1)
       }
-      return result;
+      return result
     }
-    return value;
+    return value
   }
-  const result: Record<string, unknown> = Schema.decodeUnknownSync(ObjectSchema)(
-    bound(metadata, 0),
-  );
+  const result: Record<string, unknown> = Schema.decodeUnknownSync(ObjectSchema)(bound(metadata, 0))
   if (encode(result) !== encode(metadata)) {
-    result.evidenceTruncated = true;
+    result.evidenceTruncated = true
   }
-  return result;
+  return result
 }

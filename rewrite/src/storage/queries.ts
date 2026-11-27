@@ -5,16 +5,16 @@ import type {
   Mode,
   RecentDecision,
   StoreHealth,
-} from "../domain";
-import { StorageContext } from "./context";
-import type { DecisionRecord, ActionRecord } from "./records";
-import { decode, ActionPayloadSchema, ClassificationSchema, SnapshotSchema } from "./codecs";
+} from '../domain'
+import { StorageContext } from './context'
+import type { DecisionRecord, ActionRecord } from './records'
+import { decode, ActionPayloadSchema, ClassificationSchema, SnapshotSchema } from './codecs'
 
 export function getOffset(context: StorageContext): number {
   const offset = context.get<{ value: string }>(`
         SELECT value FROM meta WHERE key = 'offset'
-    `);
-  return Number(offset?.value ?? 0);
+    `)
+  return Number(offset?.value ?? 0)
 }
 
 export function getDecision(context: StorageContext, id: string): Decision | undefined {
@@ -26,9 +26,9 @@ export function getDecision(context: StorageContext, id: string): Decision | und
   WHERE d.id=?
 `,
     id,
-  );
+  )
   if (!row) {
-    return undefined;
+    return undefined
   }
   return {
     ...decode(row.payload, ClassificationSchema),
@@ -38,8 +38,8 @@ export function getDecision(context: StorageContext, id: string): Decision | und
     snapshotId: row.snapshotId,
     createdAt: row.createdAt,
     overriddenAt: row.overriddenAt ?? null,
-    status: row.overriddenAt !== null ? "overridden" : row.status,
-  };
+    status: row.overriddenAt !== null ? 'overridden' : row.status,
+  }
 }
 
 export function decisionsFor(context: StorageContext, userId: number): Decision[] {
@@ -50,23 +50,23 @@ export function decisionsFor(context: StorageContext, userId: number): Decision[
         ORDER BY createdAt DESC, rowid DESC
     `,
     userId,
-  );
-  return decisions.map((decision) => getDecision(context, decision.id)!);
+  )
+  return decisions.map((decision) => getDecision(context, decision.id)!)
 }
 
 export function recentDecisions(
   context: StorageContext,
   limit = 10,
   chatId?: number,
-  verdicts: ReadonlyArray<string> = ["spam", "uncertain"],
+  verdicts: ReadonlyArray<string> = ['spam', 'uncertain'],
 ): RecentDecision[] {
-  const canonical = chatId === undefined ? undefined : context.canonicalChatId(chatId);
+  const canonical = chatId === undefined ? undefined : context.canonicalChatId(chatId)
   const rows = context.all<
     DecisionRecord & {
-      username: string | null;
-      displayName: string | null;
-      snapshotPayload: string | null;
-      actionMode: Mode | null;
+      username: string | null
+      displayName: string | null
+      snapshotPayload: string | null
+      actionMode: Mode | null
     }
   >(
     `
@@ -82,7 +82,7 @@ export function recentDecisions(
     LEFT JOIN subjects u ON u.chatId = d.chatId AND u.userId = d.userId
     LEFT JOIN snapshots s ON s.id = d.snapshotId
     WHERE d.status != 'legacy'
-      ${canonical === undefined ? "" : "AND d.chatId = ?"}
+      ${canonical === undefined ? '' : 'AND d.chatId = ?'}
       AND json_extract(d.payload, '$.verdict') IN (SELECT value FROM json_each(?))
     ORDER BY d.createdAt DESC, d.rowid DESC
     LIMIT ?
@@ -90,21 +90,21 @@ export function recentDecisions(
     ...(canonical === undefined
       ? [JSON.stringify(verdicts), Math.max(1, Math.min(25, limit))]
       : [canonical, JSON.stringify(verdicts), Math.max(1, Math.min(25, limit))]),
-  );
+  )
 
   return rows.map((row) => {
-    const classification = decode(row.payload, ClassificationSchema);
-    let snippet = "";
+    const classification = decode(row.payload, ClassificationSchema)
+    let snippet = ''
     if (row.snapshotPayload) {
       try {
-        const snapshot = decode(row.snapshotPayload, SnapshotSchema);
+        const snapshot = decode(row.snapshotPayload, SnapshotSchema)
         snippet = snapshot.messages
           .map((m) => m.text.trim())
           .filter(Boolean)
-          .join(" / ")
-          .slice(0, 140);
+          .join(' / ')
+          .slice(0, 140)
       } catch {
-        snippet = "";
+        snippet = ''
       }
     }
     return {
@@ -115,13 +115,13 @@ export function recentDecisions(
       snapshotId: row.snapshotId,
       createdAt: row.createdAt,
       overriddenAt: row.overriddenAt ?? null,
-      status: row.overriddenAt !== null ? "overridden" : row.status,
+      status: row.overriddenAt !== null ? 'overridden' : row.status,
       username: row.username ?? null,
       displayName: row.displayName ?? null,
       mode: row.actionMode ?? context.settings.mode,
       snippet,
-    };
-  });
+    }
+  })
 }
 
 export function resolveUsername(
@@ -129,9 +129,9 @@ export function resolveUsername(
   chatId: number,
   rawUsername: string,
 ): number[] {
-  const normalized = rawUsername.trim().replace(/^@/, "").toLowerCase();
-  if (!normalized || !/^[a-z0-9_]{3,64}$/.test(normalized)) return [];
-  const canonical = context.canonicalChatId(chatId);
+  const normalized = rawUsername.trim().replace(/^@/, '').toLowerCase()
+  if (!normalized || !/^[a-z0-9_]{3,64}$/.test(normalized)) return []
+  const canonical = context.canonicalChatId(chatId)
   return context
     .all<{ userId: number }>(
       `
@@ -144,7 +144,7 @@ export function resolveUsername(
       canonical,
       normalized,
     )
-    .map((row) => row.userId);
+    .map((row) => row.userId)
 }
 
 export function decisionForMessage(
@@ -153,7 +153,7 @@ export function decisionForMessage(
   messageId: number,
 ): Decision | undefined {
   const row = context.get<{
-    id: string;
+    id: string
   }>(
     `
   SELECT d.id
@@ -168,8 +168,8 @@ export function decisionForMessage(
     context.canonicalChatId(chatId),
     messageId,
     chatId,
-  );
-  return row ? getDecision(context, row.id) : undefined;
+  )
+  return row ? getDecision(context, row.id) : undefined
 }
 
 export function chatEnabled(context: StorageContext, chatId: number): boolean {
@@ -178,31 +178,31 @@ export function chatEnabled(context: StorageContext, chatId: number): boolean {
         SELECT enabled FROM chats WHERE chatId = ?
     `,
     context.canonicalChatId(chatId),
-  );
-  return chat?.enabled === 1;
+  )
+  return chat?.enabled === 1
 }
 
 export function chatSummaries(context: StorageContext): Array<{
-  readonly chatId: number;
-  readonly name: string;
-  readonly enabled: boolean;
-  readonly approved: number;
-  readonly regulars: number;
+  readonly chatId: number
+  readonly name: string
+  readonly enabled: boolean
+  readonly approved: number
+  readonly regulars: number
 }> {
-  const threshold = context.settings.reputationThreshold ?? 5;
+  const threshold = context.settings.reputationThreshold ?? 5
   return context.settings.chatIds.map((chatId) => {
-    const canonical = context.canonicalChatId(chatId);
-    const resolved = context.resolveChatId(canonical);
+    const canonical = context.canonicalChatId(chatId)
+    const resolved = context.resolveChatId(canonical)
     const name =
       context.settings.chatNames?.[String(resolved)] ??
       context.settings.chatNames?.[String(chatId)] ??
-      `Чат ${resolved}`;
-    const enabled = chatEnabled(context, canonical);
+      `Чат ${resolved}`
+    const enabled = chatEnabled(context, canonical)
     const approved =
       context.get<{ n: number }>(
         `SELECT COUNT(*) AS n FROM subjects WHERE chatId = ? AND approved IS NOT NULL`,
         canonical,
-      )?.n ?? 0;
+      )?.n ?? 0
     const regulars =
       threshold > 0
         ? (context.get<{ n: number }>(
@@ -210,9 +210,9 @@ export function chatSummaries(context: StorageContext): Array<{
             canonical,
             threshold,
           )?.n ?? 0)
-        : 0;
-    return { chatId: resolved, name, enabled, approved, regulars };
-  });
+        : 0
+    return { chatId: resolved, name, enabled, approved, regulars }
+  })
 }
 
 export function blockedAuthJobs(context: StorageContext): number {
@@ -225,14 +225,14 @@ export function blockedAuthJobs(context: StorageContext): number {
         AND (error LIKE '%401%' OR error LIKE '%403%' OR error LIKE '%API key%')
     `,
     )?.n ?? 0
-  );
+  )
 }
 
 export function needsAttentionActions(context: StorageContext): Array<{
-  readonly id: string;
-  readonly chatId: number;
-  readonly userId: number;
-  readonly error: string | null;
+  readonly id: string
+  readonly chatId: number
+  readonly userId: number
+  readonly error: string | null
 }> {
   return context.all<{ id: string; chatId: number; userId: number; error: string | null }>(
     `
@@ -242,64 +242,64 @@ export function needsAttentionActions(context: StorageContext): Array<{
     ORDER BY createdAt DESC
     LIMIT 20
   `,
-  );
+  )
 }
 
 export function status(context: StorageContext, chatId?: number): Record<string, number> {
   if (chatId !== undefined) {
-    chatId = context.canonicalChatId(chatId);
+    chatId = context.canonicalChatId(chatId)
   }
-  const result: Record<string, number> = {};
-  const where = chatId === undefined ? "" : " WHERE chatId=?";
-  const args = chatId === undefined ? [] : [chatId];
-  for (const table of ["subjects", "decisions", "snapshots"]) {
+  const result: Record<string, number> = {}
+  const where = chatId === undefined ? '' : ' WHERE chatId=?'
+  const args = chatId === undefined ? [] : [chatId]
+  for (const table of ['subjects', 'decisions', 'snapshots']) {
     result[table] = context.get<{
-      n: number;
+      n: number
     }>(
       `
   SELECT COUNT(*) AS n FROM ${table}${where}
 `,
       ...args,
-    )!.n;
+    )!.n
   }
   result.messages = context.get<{
-    n: number;
+    n: number
   }>(
     `
-  SELECT COUNT(*) AS n FROM messages${chatId === undefined ? "" : " WHERE chatId IN (SELECT aliasId FROM chat_aliases WHERE canonicalId=?)"}
+  SELECT COUNT(*) AS n FROM messages${chatId === undefined ? '' : ' WHERE chatId IN (SELECT aliasId FROM chat_aliases WHERE canonicalId=?)'}
 `,
     ...args,
-  )!.n;
-  for (const table of ["jobs", "actions"]) {
+  )!.n
+  for (const table of ['jobs', 'actions']) {
     for (const row of context.all<{
-      state: string;
-      n: number;
+      state: string
+      n: number
     }>(
       `
   SELECT state,COUNT(*) AS n FROM ${table}${where} GROUP BY state
 `,
       ...args,
     )) {
-      result[`${table}_${row.state}`] = row.n;
+      result[`${table}_${row.state}`] = row.n
     }
   }
   result.approved = context.get<{
-    n: number;
+    n: number
   }>(
     `
-  SELECT COUNT(*) AS n FROM subjects WHERE approved IS NOT NULL${chatId === undefined ? "" : " AND chatId=?"}
+  SELECT COUNT(*) AS n FROM subjects WHERE approved IS NOT NULL${chatId === undefined ? '' : ' AND chatId=?'}
 `,
     ...args,
-  )!.n;
+  )!.n
   result.command_backlog = context.get<{
-    n: number;
+    n: number
   }>(
     `
-  SELECT COUNT(*) AS n FROM commands WHERE state!='done'${chatId === undefined ? "" : " AND json_extract(payload,'$.chatId') IN (SELECT aliasId FROM chat_aliases WHERE canonicalId=?)"}
+  SELECT COUNT(*) AS n FROM commands WHERE state!='done'${chatId === undefined ? '' : " AND json_extract(payload,'$.chatId') IN (SELECT aliasId FROM chat_aliases WHERE canonicalId=?)"}
 `,
     ...args,
-  )!.n;
-  return result;
+  )!.n
+  return result
 }
 
 export function action(context: StorageContext, id: string): ActionDetail | undefined {
@@ -310,9 +310,9 @@ export function action(context: StorageContext, id: string): ActionDetail | unde
   WHERE id=?
 `,
     id,
-  );
+  )
   if (!row) {
-    return undefined;
+    return undefined
   }
   const attempts = context.all<ActionAttempt>(
     `
@@ -322,23 +322,23 @@ export function action(context: StorageContext, id: string): ActionDetail | unde
         ORDER BY id
     `,
     id,
-  );
+  )
   return {
     ...row,
     chatId: context.resolveChatId(row.chatId),
     payload: decode(row.payload, ActionPayloadSchema),
     attempts,
-  };
+  }
 }
 
 export function health(context: StorageContext): StoreHealth {
   const journal = context.get<{ value: string }>(`
         SELECT value FROM meta WHERE key = 'journalCursor'
-    `);
+    `)
   return {
     mode: context.settings.mode,
     offset: getOffset(context),
     journalCursor: Number(journal?.value ?? 0),
     ...status(context),
-  };
+  }
 }
