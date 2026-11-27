@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+node_modules
+data
+*.sqlite
+*.sqlite-*
+*.session
+*.process-lock
+coverage

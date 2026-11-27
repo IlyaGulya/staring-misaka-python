@@ -2,6 +2,14 @@
 
 Staring Misaka is a Telegram bot designed to detect and manage spam in group chats using Claude AI. It provides automatic or admin-approved spam detection and user banning capabilities.
 
+## New Bun implementation
+
+The new application lives in [`rewrite/`](rewrite/README.md): Bun 1.4.2,
+Effect 4.0.5, grammY, durable SQLite actions, a read-only MTProto observer,
+explain/undo, and shadow-first operation. Its launch, import and cutover
+instructions are separate from the Python application described below.
+Production is not switched automatically; never run both receivers with the same bot token.
+
 ## Features
 
 - Automatic spam detection using Claude AI
